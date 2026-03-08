@@ -2,6 +2,9 @@ import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { OrchestratorActionReactor } from "../Services/OrchestratorActionReactor.ts";
+import { OrchestratorMessageReactor } from "../Services/OrchestratorMessageReactor.ts";
+import { OrchestratorVerificationReactor } from "../Services/OrchestratorVerificationReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
@@ -43,6 +46,27 @@ describe("OrchestrationReactor", () => {
             }),
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(OrchestratorActionReactor, {
+            start: Effect.sync(() => {
+              started.push("orchestrator-action-reactor");
+            }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(OrchestratorMessageReactor, {
+            start: Effect.sync(() => {
+              started.push("orchestrator-message-reactor");
+            }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(OrchestratorVerificationReactor, {
+            start: Effect.sync(() => {
+              started.push("orchestrator-verification-reactor");
+            }),
+          }),
+        ),
       ),
     );
 
@@ -54,6 +78,9 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
+      "orchestrator-action-reactor",
+      "orchestrator-message-reactor",
+      "orchestrator-verification-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

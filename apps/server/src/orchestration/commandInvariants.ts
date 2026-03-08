@@ -3,6 +3,10 @@ import type {
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
+  OrchestratorLane,
+  OrchestratorLaneId,
+  OrchestratorRun,
+  OrchestratorRunId,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -36,6 +40,26 @@ export function listThreadsByProjectId(
   projectId: ProjectId,
 ): ReadonlyArray<OrchestrationThread> {
   return readModel.threads.filter((thread) => thread.projectId === projectId);
+}
+
+export function findOrchestratorRunById(
+  readModel: OrchestrationReadModel,
+  runId: OrchestratorRunId,
+): OrchestratorRun | undefined {
+  return readModel.orchestratorRuns.find((run) => run.id === runId);
+}
+
+export function findOrchestratorLaneById(
+  readModel: OrchestrationReadModel,
+  laneId: OrchestratorLaneId,
+): OrchestratorLane | undefined {
+  for (const run of readModel.orchestratorRuns) {
+    const lane = run.lanes.find((entry) => entry.id === laneId);
+    if (lane) {
+      return lane;
+    }
+  }
+  return undefined;
 }
 
 export function requireProject(input: {
@@ -100,6 +124,72 @@ export function requireThreadAbsent(input: {
     invariantError(
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+export function requireOrchestratorRun(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly runId: OrchestratorRunId;
+}): Effect.Effect<OrchestratorRun, OrchestrationCommandInvariantError> {
+  const run = findOrchestratorRunById(input.readModel, input.runId);
+  if (run) {
+    return Effect.succeed(run);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Orchestrator run '${input.runId}' does not exist for command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireOrchestratorRunAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly runId: OrchestratorRunId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (!findOrchestratorRunById(input.readModel, input.runId)) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Orchestrator run '${input.runId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+export function requireOrchestratorLane(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly laneId: OrchestratorLaneId;
+}): Effect.Effect<OrchestratorLane, OrchestrationCommandInvariantError> {
+  const lane = findOrchestratorLaneById(input.readModel, input.laneId);
+  if (lane) {
+    return Effect.succeed(lane);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Orchestrator lane '${input.laneId}' does not exist for command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireOrchestratorLaneAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly laneId: OrchestratorLaneId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (!findOrchestratorLaneById(input.readModel, input.laneId)) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Orchestrator lane '${input.laneId}' already exists and cannot be created twice.`,
     ),
   );
 }

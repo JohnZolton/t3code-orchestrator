@@ -30,6 +30,8 @@ const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
 const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
+const ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
+const ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
@@ -503,6 +505,15 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(""),
   });
 
+  const assistantMessageStateByMessageId = yield* Cache.make<
+    MessageId,
+    { sawDelta: boolean; finalized: boolean }
+  >({
+    capacity: ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_CACHE_CAPACITY,
+    timeToLive: ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_TTL,
+    lookup: () => Effect.succeed({ sawDelta: false, finalized: false }),
+  });
+
   const bufferedProposedPlanById = yield* Cache.make<string, { text: string; createdAt: string }>({
     capacity: BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
@@ -610,6 +621,33 @@ const make = Effect.gen(function* () {
   const clearBufferedAssistantText = (messageId: MessageId) =>
     Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
 
+  const markAssistantMessageSawDelta = (messageId: MessageId) =>
+    Cache.getOption(assistantMessageStateByMessageId, messageId).pipe(
+      Effect.flatMap((existingState) =>
+        Cache.set(assistantMessageStateByMessageId, messageId, {
+          sawDelta: Option.getOrElse(existingState, () => ({ sawDelta: false, finalized: false })).sawDelta || true,
+          finalized: Option.getOrElse(existingState, () => ({ sawDelta: false, finalized: false })).finalized,
+        }),
+      ),
+    );
+
+  const getAssistantMessageState = (messageId: MessageId) =>
+    Cache.getOption(assistantMessageStateByMessageId, messageId).pipe(
+      Effect.map((existingState) =>
+        Option.getOrElse(existingState, () => ({ sawDelta: false, finalized: false })),
+      ),
+    );
+
+  const markAssistantMessageFinalized = (messageId: MessageId) =>
+    getAssistantMessageState(messageId).pipe(
+      Effect.flatMap((state) =>
+        Cache.set(assistantMessageStateByMessageId, messageId, {
+          ...state,
+          finalized: true,
+        }),
+      ),
+    );
+
   const appendBufferedProposedPlan = (planId: string, delta: string, createdAt: string) =>
     Cache.getOption(bufferedProposedPlanById, planId).pipe(
       Effect.flatMap((existingEntry) => {
@@ -646,11 +684,18 @@ const make = Effect.gen(function* () {
     fallbackText?: string;
   }) =>
     Effect.gen(function* () {
+      const messageState = yield* getAssistantMessageState(input.messageId);
+      if (messageState.finalized) {
+        return;
+      }
+
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
       const text =
         bufferedText.length > 0
           ? bufferedText
-          : (input.fallbackText?.trim().length ?? 0) > 0
+          : messageState.sawDelta
+            ? ""
+            : (input.fallbackText?.trim().length ?? 0) > 0
             ? input.fallbackText!
             : "";
 
@@ -674,6 +719,7 @@ const make = Effect.gen(function* () {
         ...(input.turnId ? { turnId: input.turnId } : {}),
         createdAt: input.createdAt,
       });
+      yield* markAssistantMessageFinalized(input.messageId);
       yield* clearAssistantMessageState(input.messageId);
     });
 
@@ -895,6 +941,7 @@ const make = Effect.gen(function* () {
         const assistantMessageId = MessageId.makeUnsafe(
           `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
         );
+        yield* markAssistantMessageSawDelta(assistantMessageId);
         const turnId = toTurnId(event.turnId);
         if (turnId) {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);

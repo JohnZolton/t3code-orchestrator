@@ -199,6 +199,7 @@ function createSnapshotForTargetUser(options: {
         deletedAt: null,
       },
     ],
+    orchestratorRuns: [],
     threads: [
       {
         id: THREAD_ID,

@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  type OrchestratorRun,
   type ProviderKind,
   ThreadId,
   type OrchestrationReadModel,
@@ -20,6 +21,7 @@ import { type ChatMessage, type Project, type Thread } from "./types";
 export interface AppState {
   projects: Project[];
   threads: Thread[];
+  orchestratorRuns: OrchestratorRun[];
   threadsHydrated: boolean;
 }
 
@@ -38,6 +40,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 const initialState: AppState = {
   projects: [],
   threads: [],
+  orchestratorRuns: [],
   threadsHydrated: false,
 };
 const persistedExpandedProjectCwds = new Set<string>();
@@ -283,6 +286,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ...state,
     projects,
     threads,
+    orchestratorRuns: readModel.orchestratorRuns.map((run) => ({ ...run })),
     threadsHydrated: true,
   };
 }

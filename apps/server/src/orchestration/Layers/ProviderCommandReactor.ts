@@ -5,6 +5,7 @@ import {
   type OrchestrationEvent,
   type ProviderModelOptions,
   type ProviderKind,
+  type ProviderSessionStartInput,
   type ProviderServiceTier,
   type OrchestrationSession,
   ThreadId,
@@ -15,6 +16,7 @@ import {
 import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -72,6 +74,7 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const WORKTREE_BRANCH_PREFIX = "t3code";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
+const ORCHESTRATOR_THREAD_TITLE = "Orchestrator";
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -103,6 +106,104 @@ function isTemporaryWorktreeBranch(branch: string): boolean {
   return TEMP_WORKTREE_BRANCH_PATTERN.test(branch.trim().toLowerCase());
 }
 
+function buildOrchestratorDeveloperInstructions(input: {
+  readonly projects: ReadonlyArray<{
+    id: string;
+    name: string;
+    cwd: string;
+    model: string;
+  }>;
+  readonly threads: ReadonlyArray<{
+    id: string;
+    projectId: string;
+    title: string;
+    model: string;
+    runtimeMode: string;
+  }>;
+  readonly userMessage: string;
+}): string {
+  const threadLinesByProject = new Map<string, string[]>();
+  for (const thread of input.threads) {
+    const lines = threadLinesByProject.get(thread.projectId) ?? [];
+    lines.push(`  - ${thread.title} [thread:${thread.id}] model=${thread.model} runtime=${thread.runtimeMode}`);
+    threadLinesByProject.set(thread.projectId, lines);
+  }
+
+  const projectLines = input.projects.map((project) => {
+    const threadLines = threadLinesByProject.get(project.id) ?? [];
+    return [
+      `- ${project.name} [project:${project.id}] cwd=${project.cwd} defaultModel=${project.model}`,
+      ...(threadLines.length > 0 ? threadLines : ["  - no worker threads yet"]),
+    ].join("\n");
+  });
+
+  return [
+    "You are the T3 Code orchestrator for this workspace.",
+    "Your job is to coordinate existing worker threads and spin up new worker threads when needed.",
+    "You can coordinate work across all projects and existing threads.",
+    "The MCP tools are the source of truth for workspace thread management.",
+    "Use the available MCP tools instead of inventing fake tool protocols, printing JSON for actions, or inspecting the repo to infer thread state.",
+    "Do not inspect the repository, run shell commands, or browse files to answer orchestration requests. This session is for delegation and thread management only.",
+    "For requests about worker creation, delegation, routing work, or checking worker progress, use these MCP tools first: list_projects, list_threads, create_thread, send_to_thread, read_thread_status, interrupt_thread.",
+    "When the user asks you to spin up a worker, create a worker thread on an existing project and give it a concise implementation-oriented title plus a clear opening prompt.",
+    "When a worker reports progress or completion, act as the first-pass reviewer before raising it to the user.",
+    "If the worker is missing proof, missing a definition-of-done item, or is only partially complete, send it back with a concrete follow-up using send_to_thread.",
+    "Only tell the user work is complete when the worker has returned concrete, human-checkable evidence.",
+    "Do not narrate each tool call, poll, or review step in chat.",
+    "Prefer at most one short acknowledgement after delegation and one final outcome after review.",
+    "Do not send multiple assistant updates for the same delegated worker result unless the user explicitly asked for live monitoring.",
+    "Do not ask the user to manage threads manually when you can do it with MCP tools.",
+    "Do not dump workspace inventory back to the user unless it is directly useful.",
+    "",
+    "Workspace projects and threads:",
+    ...projectLines,
+    "",
+    `Latest user request: ${input.userMessage}`,
+  ].join("\n");
+}
+
+function buildOrchestratorMcpConfigEntries(input: {
+  readonly baseUrl: string;
+}): ReadonlyArray<{ key: string; value: unknown }> {
+  return [
+    {
+      key: "features.shell_tool",
+      value: false,
+    },
+    {
+      key: "project_root_markers",
+      value: [],
+    },
+    {
+      key: "history.persistence",
+      value: "none",
+    },
+    {
+      key: "mcp_servers.t3code_orchestrator.url",
+      value: `${input.baseUrl}/mcp/orchestrator`,
+    },
+    {
+      key: "mcp_servers.t3code_orchestrator.enabled",
+      value: true,
+    },
+    {
+      key: "mcp_servers.t3code_orchestrator.required",
+      value: true,
+    },
+  ];
+}
+
+function buildServerBaseUrl(input: { readonly host: string | undefined; readonly port: number }): string {
+  const rawHost = input.host?.trim();
+  const host =
+    !rawHost || rawHost === "0.0.0.0" || rawHost === "::" || rawHost === "[::]"
+      ? "127.0.0.1"
+      : rawHost;
+
+  const normalizedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${normalizedHost}:${input.port}`;
+}
+
 function buildGeneratedWorktreeBranchName(raw: string): string {
   const normalized = raw
     .trim()
@@ -128,6 +229,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const serverConfig = yield* ServerConfig;
   const providerService = yield* ProviderService;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
@@ -203,6 +305,7 @@ const make = Effect.gen(function* () {
       readonly model?: string;
       readonly modelOptions?: ProviderModelOptions;
       readonly serviceTier?: ProviderServiceTier | null;
+      readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -239,6 +342,7 @@ const make = Effect.gen(function* () {
         ...(desiredModel ? { model: desiredModel } : {}),
         ...(options?.serviceTier !== undefined ? { serviceTier: options.serviceTier } : {}),
         ...(options?.modelOptions !== undefined ? { modelOptions: options.modelOptions } : {}),
+        ...(options?.providerOptions !== undefined ? { providerOptions: options.providerOptions } : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -264,7 +368,15 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const providerChanged = options?.provider !== undefined && options.provider !== currentProvider;
+      const providerOptionsRequireRestart = options?.providerOptions !== undefined;
       const activeSession = yield* resolveActiveSession(existingSessionThreadId);
+      if (!activeSession) {
+        const restartedSession = yield* startProviderSession(
+          options?.provider !== undefined ? { provider: options.provider } : undefined,
+        );
+        yield* bindSessionToThread(restartedSession);
+        return restartedSession.threadId;
+      }
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -274,12 +386,17 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange =
         modelChanged && sessionModelSwitch === "restart-session";
 
-      if (!runtimeModeChanged && !providerChanged && !shouldRestartForModelChange) {
+      if (
+        !runtimeModeChanged &&
+        !providerChanged &&
+        !shouldRestartForModelChange &&
+        !providerOptionsRequireRestart
+      ) {
         return existingSessionThreadId;
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange
+        providerChanged || shouldRestartForModelChange || providerOptionsRequireRestart
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -291,6 +408,7 @@ const make = Effect.gen(function* () {
         desiredRuntimeMode: thread.runtimeMode,
         runtimeModeChanged,
         providerChanged,
+        providerOptionsRequireRestart,
         modelChanged,
         shouldRestartForModelChange,
         hasResumeCursor: resumeCursor !== undefined,
@@ -325,7 +443,10 @@ const make = Effect.gen(function* () {
     readonly model?: string;
     readonly serviceTier?: ProviderServiceTier | null;
     readonly modelOptions?: ProviderModelOptions;
+    readonly assistantDeliveryMode?: "streaming" | "buffered";
     readonly interactionMode?: "default" | "plan";
+    readonly developerInstructions?: string;
+    readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -337,6 +458,7 @@ const make = Effect.gen(function* () {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
       ...(input.modelOptions !== undefined ? { modelOptions: input.modelOptions } : {}),
+      ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
     });
     const normalizedInput = toNonEmptyProviderInput(input.messageText);
     const normalizedAttachments = input.attachments ?? [];
@@ -357,7 +479,13 @@ const make = Effect.gen(function* () {
       ...(modelForTurn !== undefined ? { model: modelForTurn } : {}),
       ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
       ...(input.modelOptions !== undefined ? { modelOptions: input.modelOptions } : {}),
+      ...(input.assistantDeliveryMode !== undefined
+        ? { assistantDeliveryMode: input.assistantDeliveryMode }
+        : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.developerInstructions !== undefined
+        ? { developerInstructions: input.developerInstructions }
+        : {}),
     });
   });
 
@@ -455,6 +583,46 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const readModel = yield* orchestrationEngine.getReadModel();
+
+    const orchestratorDeveloperInstructions =
+      thread.title === ORCHESTRATOR_THREAD_TITLE
+        ? buildOrchestratorDeveloperInstructions({
+            projects: readModel.projects
+              .filter((project) => project.deletedAt === null)
+              .map((project) => ({
+                id: project.id,
+                name: project.title,
+                cwd: project.workspaceRoot,
+                model: project.defaultModel ?? "gpt-5-codex",
+              })),
+            threads: readModel.threads
+              .filter((entry) => entry.deletedAt === null)
+              .filter((entry) => entry.title !== ORCHESTRATOR_THREAD_TITLE)
+              .map((entry) => ({
+                id: entry.id,
+                projectId: entry.projectId,
+                title: entry.title,
+                model: entry.model,
+                runtimeMode: entry.runtimeMode,
+              })),
+            userMessage: message.text,
+          })
+        : undefined;
+    const orchestratorProviderOptions =
+      thread.title === ORCHESTRATOR_THREAD_TITLE
+        ? {
+            codex: {
+              configEntries: [...buildOrchestratorMcpConfigEntries({
+                baseUrl: buildServerBaseUrl({
+                  host: serverConfig.host,
+                  port: serverConfig.port,
+                }),
+              })],
+            },
+          }
+        : undefined;
+
     yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
       threadId: event.payload.threadId,
       branch: thread.branch,
@@ -472,7 +640,16 @@ const make = Effect.gen(function* () {
       ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
       ...(event.payload.serviceTier !== undefined ? { serviceTier: event.payload.serviceTier } : {}),
       ...(event.payload.modelOptions !== undefined ? { modelOptions: event.payload.modelOptions } : {}),
+      ...(event.payload.assistantDeliveryMode !== undefined
+        ? { assistantDeliveryMode: event.payload.assistantDeliveryMode }
+        : {}),
       interactionMode: event.payload.interactionMode,
+      ...(orchestratorDeveloperInstructions !== undefined
+        ? { developerInstructions: orchestratorDeveloperInstructions }
+        : {}),
+      ...(orchestratorProviderOptions !== undefined
+        ? { providerOptions: orchestratorProviderOptions }
+        : {}),
       createdAt: event.payload.createdAt,
     });
   });

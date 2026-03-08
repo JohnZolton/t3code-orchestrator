@@ -10,6 +10,7 @@ import {
   TurnId,
 } from "./baseSchemas";
 import {
+  AssistantDeliveryMode,
   ChatAttachment,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -51,6 +52,14 @@ export type ProviderSession = typeof ProviderSession.Type;
 const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
   homePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  configEntries: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        key: TrimmedNonEmptyStringSchema,
+        value: Schema.Unknown,
+      }),
+    ),
+  ),
 });
 
 const ProviderStartOptions = Schema.Struct({
@@ -83,7 +92,9 @@ export const ProviderSendTurnInput = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   serviceTier: Schema.optional(Schema.NullOr(ProviderServiceTier)),
   modelOptions: Schema.optional(ProviderModelOptions),
+  assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  developerInstructions: Schema.optional(Schema.String),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

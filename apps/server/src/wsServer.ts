@@ -14,6 +14,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
+  type OrchestrationReadModel,
   type OrchestrationCommand,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -73,6 +74,7 @@ import {
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
+import { handleOrchestratorMcpRequest } from "./orchestratorMcpServer.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -438,6 +440,22 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           return;
         }
 
+        if (url.pathname === "/mcp/orchestrator") {
+          yield* Effect.tryPromise({
+            try: () =>
+              handleOrchestratorMcpRequest(req, res, {
+                getReadModel: async () =>
+                  (await runPromise(orchestrationEngine.getReadModel())) as OrchestrationReadModel,
+                dispatch: (command) => runPromise(orchestrationEngine.dispatch(command)),
+              }),
+            catch: (cause) =>
+              new RouteRequestError({
+                message: `Failed to handle orchestrator MCP request: ${String(cause)}`,
+              }),
+          });
+          return;
+        }
+
         if (url.pathname.startsWith(ATTACHMENTS_ROUTE_PREFIX)) {
           const rawRelativePath = url.pathname.slice(ATTACHMENTS_ROUTE_PREFIX.length);
           const normalizedRelativePath = normalizeAttachmentRelativePath(rawRelativePath);
@@ -727,7 +745,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   );
 
   const routeRequest = Effect.fnUntraced(function* (request: WebSocketRequest) {
-    switch (request.body._tag) {
+      switch (request.body._tag) {
       case ORCHESTRATION_WS_METHODS.getSnapshot:
         return yield* projectionReadModelQuery.getSnapshot();
 

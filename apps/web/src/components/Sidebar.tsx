@@ -2,6 +2,8 @@ import {
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
   RocketIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -22,6 +24,7 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
 import { newCommandId, newProjectId, newThreadId } from "../lib/utils";
+import { isOrchestratorThread } from "../orchestratorThread";
 import { useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
 import { type Thread } from "../types";
@@ -257,7 +260,10 @@ function ProjectFavicon({ cwd }: { cwd: string }) {
   );
 }
 
-export default function Sidebar() {
+export default function Sidebar(props: {
+  isOrchestratorCollapsed: boolean;
+  onToggleOrchestrator: () => void;
+}) {
   const projects = useStore((store) => store.projects);
   const threads = useStore((store) => store.threads);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
@@ -304,22 +310,27 @@ export default function Sidebar() {
   const pendingApprovalByThreadId = useMemo(() => {
     const map = new Map<ThreadId, boolean>();
     for (const thread of threads) {
+      if (isOrchestratorThread(thread)) continue;
       map.set(thread.id, derivePendingApprovals(thread.activities).length > 0);
     }
     return map;
   }, [threads]);
+  const visibleThreads = useMemo(
+    () => threads.filter((thread) => !isOrchestratorThread(thread)),
+    [threads],
+  );
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
   );
   const threadGitTargets = useMemo(
     () =>
-      threads.map((thread) => ({
+      visibleThreads.map((thread) => ({
         threadId: thread.id,
         branch: thread.branch,
         cwd: thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null,
       })),
-    [projectCwdById, threads],
+    [projectCwdById, visibleThreads],
   );
   const threadGitStatusCwds = useMemo(
     () => [
@@ -607,7 +618,7 @@ export default function Sidebar() {
         ],
         position,
       );
-      const thread = threads.find((t) => t.id === threadId);
+      const thread = visibleThreads.find((t) => t.id === threadId);
       if (!thread) return;
 
       if (clicked === "rename") {
@@ -688,7 +699,7 @@ export default function Sidebar() {
       }
 
       const shouldNavigateToFallback = routeThreadId === threadId;
-      const fallbackThreadId = threads.find((entry) => entry.id !== threadId)?.id ?? null;
+      const fallbackThreadId = visibleThreads.find((entry) => entry.id !== threadId)?.id ?? null;
       await api.orchestration.dispatchCommand({
         type: "thread.delete",
         commandId: newCommandId(),
@@ -761,7 +772,7 @@ export default function Sidebar() {
       const project = projects.find((entry) => entry.id === projectId);
       if (!project) return;
 
-      const projectThreads = threads.filter((thread) => thread.projectId === projectId);
+      const projectThreads = visibleThreads.filter((thread) => thread.projectId === projectId);
       if (projectThreads.length > 0) {
         toastManager.add({
           type: "warning",
@@ -802,14 +813,14 @@ export default function Sidebar() {
       clearProjectDraftThreadId,
       getDraftThreadByProjectId,
       projects,
-      threads,
+      visibleThreads,
     ],
   );
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       const activeThread = routeThreadId
-        ? threads.find((thread) => thread.id === routeThreadId)
+        ? visibleThreads.find((thread) => thread.id === routeThreadId)
         : undefined;
       const activeDraftThread = routeThreadId ? getDraftThread(routeThreadId) : null;
       if (isChatNewLocalShortcut(event, keybindings)) {
@@ -836,7 +847,7 @@ export default function Sidebar() {
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown);
     };
-  }, [getDraftThread, handleNewThread, keybindings, projects, routeThreadId, threads]);
+  }, [getDraftThread, handleNewThread, keybindings, projects, routeThreadId, visibleThreads]);
 
   useEffect(() => {
     if (!isElectron) return;
@@ -987,6 +998,27 @@ export default function Sidebar() {
           {APP_STAGE_LABEL}
         </span>
       </div>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={props.isOrchestratorCollapsed ? "Show orchestrator" : "Hide orchestrator"}
+              className="hidden size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:inline-flex"
+              onClick={props.onToggleOrchestrator}
+            >
+              {props.isOrchestratorCollapsed ? (
+                <PanelLeftOpenIcon className="size-3.5" />
+              ) : (
+                <PanelLeftCloseIcon className="size-3.5" />
+              )}
+            </button>
+          }
+        />
+        <TooltipPopup side="bottom">
+          {props.isOrchestratorCollapsed ? "Show orchestrator" : "Hide orchestrator"}
+        </TooltipPopup>
+      </Tooltip>
     </div>
   );
 
@@ -1027,7 +1059,7 @@ export default function Sidebar() {
         <SidebarGroup className="px-2 py-2">
           <SidebarMenu>
             {projects.map((project) => {
-              const projectThreads = threads
+              const projectThreads = visibleThreads
                 .filter((thread) => thread.projectId === project.id)
                 .toSorted((a, b) => {
                   const byDate = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -1036,7 +1068,7 @@ export default function Sidebar() {
                 });
               const isThreadListExpanded = expandedThreadListsByProject.has(project.id);
               const hasHiddenThreads = projectThreads.length > THREAD_PREVIEW_LIMIT;
-              const visibleThreads =
+              const previewThreads =
                 hasHiddenThreads && !isThreadListExpanded
                   ? projectThreads.slice(0, THREAD_PREVIEW_LIMIT)
                   : projectThreads;
@@ -1110,7 +1142,7 @@ export default function Sidebar() {
 
                     <CollapsibleContent>
                       <SidebarMenuSub className="mx-1 my-0 w-full translate-x-0 gap-0 px-1.5 py-0">
-                        {visibleThreads.map((thread) => {
+                        {previewThreads.map((thread) => {
                           const isActive = routeThreadId === thread.id;
                           const threadStatus = threadStatusPill(
                             thread,

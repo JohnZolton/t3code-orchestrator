@@ -22,6 +22,7 @@ import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { projectOrchestratorRuns } from "../orchestratorProjection";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -153,9 +154,15 @@ function EventRouter() {
 
     const flushSnapshotSync = async (): Promise<void> => {
       const snapshot = await api.orchestration.getSnapshot();
+      const orchestratorEvents = (await api.orchestration.replayEvents(0)).filter(
+        (event) => event.type.startsWith("orchestrator."),
+      );
       if (disposed) return;
       latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
-      syncServerReadModel(snapshot);
+      syncServerReadModel({
+        ...snapshot,
+        orchestratorRuns: projectOrchestratorRuns(orchestratorEvents),
+      });
       const draftThreadIds = Object.keys(
         useComposerDraftStore.getState().draftThreadsByThreadId,
       ) as ThreadId[];

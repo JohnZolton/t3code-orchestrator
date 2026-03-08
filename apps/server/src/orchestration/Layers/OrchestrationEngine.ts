@@ -1,6 +1,8 @@
 import type {
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestratorLaneId,
+  OrchestratorRunId,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -30,8 +32,8 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "thread" | "orchestrator-run" | "orchestrator-lane";
+  readonly aggregateId: ProjectId | ThreadId | OrchestratorRunId | OrchestratorLaneId;
 } {
   switch (command.type) {
     case "project.create":
@@ -40,6 +42,56 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    case "orchestrator.run.create":
+    case "orchestrator.run.message":
+    case "orchestrator.run.synthesis.set":
+      return {
+        aggregateKind: "orchestrator-run",
+        aggregateId: command.runId,
+      };
+    case "orchestrator.lane.create":
+    case "orchestrator.lane.dispatch":
+    case "orchestrator.lane.status.set":
+    case "orchestrator.lane.verify":
+      return {
+        aggregateKind: "orchestrator-lane",
+        aggregateId: command.laneId,
+      };
+    case "orchestrator.lane.dependency.upsert":
+      return {
+        aggregateKind: "orchestrator-run",
+        aggregateId: command.runId,
+      };
+    case "orchestrator.artifact.upsert":
+      return {
+        aggregateKind: command.artifact.laneId === null ? "orchestrator-run" : "orchestrator-lane",
+        aggregateId: command.artifact.laneId ?? command.artifact.runId,
+      };
+    case "orchestrator.verification.upsert":
+      return {
+        aggregateKind: "orchestrator-lane",
+        aggregateId: command.report.laneId,
+      };
+    case "orchestrator.approval.request":
+      return {
+        aggregateKind: command.approval.laneId === null ? "orchestrator-run" : "orchestrator-lane",
+        aggregateId: command.approval.laneId ?? command.approval.runId,
+      };
+    case "orchestrator.approval.resolve":
+      return {
+        aggregateKind: "orchestrator-run",
+        aggregateId: command.approvalId as unknown as OrchestratorRunId,
+      };
+    case "orchestrator.process-rule.propose":
+      return {
+        aggregateKind: "orchestrator-run",
+        aggregateId: (command.version.runId ?? command.version.id) as unknown as OrchestratorRunId,
+      };
+    case "orchestrator.process-rule.status.set":
+      return {
+        aggregateKind: "orchestrator-run",
+        aggregateId: command.versionId as unknown as OrchestratorRunId,
       };
     default:
       return {

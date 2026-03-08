@@ -1,9 +1,16 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  OrchestratorLaneId,
+  OrchestratorRunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  OrchestratorRun,
 } from "@t3tools/contracts";
 import { Effect, Schema } from "effect";
 
@@ -23,6 +30,19 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  OrchestratorApprovalRequestedPayload,
+  OrchestratorApprovalResolvedPayload,
+  OrchestratorArtifactUpsertedPayload,
+  OrchestratorLaneCreatedPayload,
+  OrchestratorLaneDependencyUpsertedPayload,
+  OrchestratorLaneDispatchedPayload,
+  OrchestratorLaneStatusSetPayload,
+  OrchestratorProcessRuleProposedPayload,
+  OrchestratorProcessRuleStatusSetPayload,
+  OrchestratorRunCreatedPayload,
+  OrchestratorRunMessageAddedPayload,
+  OrchestratorRunSynthesisSetPayload,
+  OrchestratorVerificationUpsertedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -41,6 +61,32 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function updateRun(
+  runs: ReadonlyArray<OrchestratorRun>,
+  runId: OrchestratorRunId,
+  updater: (run: OrchestratorRun) => OrchestratorRun,
+): OrchestratorRun[] {
+  return runs.map((run) => (run.id === runId ? updater(run) : run));
+}
+
+function updateLaneInRunsWithRunTimestamp(
+  runs: ReadonlyArray<OrchestratorRun>,
+  laneId: OrchestratorLaneId,
+  updatedAt: string,
+  updater: (lane: OrchestratorRun["lanes"][number]) => OrchestratorRun["lanes"][number],
+): OrchestratorRun[] {
+  return runs.map((run) => {
+    if (!run.lanes.some((lane) => lane.id === laneId)) {
+      return run;
+    }
+    return {
+      ...run,
+      lanes: run.lanes.map((lane) => (lane.id === laneId ? updater(lane) : lane)),
+      updatedAt,
+    };
+  });
 }
 
 function decodeForEvent<A>(
@@ -158,6 +204,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    orchestratorRuns: [],
     updatedAt: nowIso,
   };
 }
@@ -615,6 +662,288 @@ export function projectEvent(
           };
         }),
       );
+
+    case "orchestrator.run.created":
+      return decodeForEvent(OrchestratorRunCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: [...nextBase.orchestratorRuns.filter((run) => run.id !== payload.run.id), payload.run].toSorted(
+            (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+          ),
+        })),
+      );
+
+    case "orchestrator.run.message-added":
+      return decodeForEvent(
+        OrchestratorRunMessageAddedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.runId, (run) => ({
+            ...run,
+            messages: [...run.messages, payload.message].slice(-500),
+            updatedAt: payload.updatedAt,
+          })),
+        })),
+      );
+
+    case "orchestrator.run.synthesis-set":
+      return decodeForEvent(
+        OrchestratorRunSynthesisSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.runId, (run) => ({
+            ...run,
+            latestSynthesis: payload.latestSynthesis,
+            updatedAt: payload.updatedAt,
+          })),
+        })),
+      );
+
+    case "orchestrator.lane.created":
+      return decodeForEvent(OrchestratorLaneCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.lane.runId, (run) => ({
+            ...run,
+            lanes: [...run.lanes.filter((lane) => lane.id !== payload.lane.id), payload.lane].toSorted(
+              (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+            ),
+            updatedAt: payload.lane.updatedAt,
+          })),
+        })),
+      );
+
+    case "orchestrator.lane.dispatched":
+      return decodeForEvent(
+        OrchestratorLaneDispatchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateLaneInRunsWithRunTimestamp(
+            nextBase.orchestratorRuns,
+            payload.laneId,
+            payload.updatedAt,
+            (lane) => ({
+              ...lane,
+              brief: payload.brief,
+              status: payload.status,
+              updatedAt: payload.updatedAt,
+            }),
+          ),
+        })),
+      );
+
+    case "orchestrator.lane.status-set":
+      return decodeForEvent(
+        OrchestratorLaneStatusSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateLaneInRunsWithRunTimestamp(
+            nextBase.orchestratorRuns,
+            payload.laneId,
+            payload.updatedAt,
+            (lane) => ({
+              ...lane,
+              status: payload.status,
+              blockedReason: payload.blockedReason,
+              updatedAt: payload.updatedAt,
+            }),
+          ),
+        })),
+      );
+
+    case "orchestrator.lane.dependency-upserted":
+      return decodeForEvent(
+        OrchestratorLaneDependencyUpsertedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.runId, (run) => ({
+            ...run,
+            dependencies: [
+              ...run.dependencies.filter(
+                (entry) =>
+                  !(
+                    entry.fromLaneId === payload.dependency.fromLaneId &&
+                    entry.toLaneId === payload.dependency.toLaneId
+                  ),
+              ),
+              payload.dependency,
+            ],
+            updatedAt: payload.updatedAt,
+          })),
+        })),
+      );
+
+    case "orchestrator.artifact.upserted":
+      return decodeForEvent(
+        OrchestratorArtifactUpsertedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.artifact.runId, (run) => ({
+            ...run,
+            lanes: payload.artifact.laneId
+              ? run.lanes.map((lane) =>
+                  lane.id === payload.artifact.laneId
+                    ? {
+                        ...lane,
+                        artifacts: [
+                          ...lane.artifacts.filter((artifact) => artifact.id !== payload.artifact.id),
+                          payload.artifact,
+                        ],
+                        updatedAt: payload.artifact.updatedAt,
+                      }
+                    : lane,
+                )
+              : run.lanes,
+            updatedAt: payload.artifact.updatedAt,
+          })),
+        })),
+      );
+
+    case "orchestrator.verification.upserted":
+      return decodeForEvent(
+        OrchestratorVerificationUpsertedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateLaneInRunsWithRunTimestamp(
+            nextBase.orchestratorRuns,
+            payload.report.laneId,
+            payload.report.updatedAt,
+            (lane) => ({
+              ...lane,
+              verification: payload.report,
+              updatedAt: payload.report.updatedAt,
+            }),
+          ),
+        })),
+      );
+
+    case "orchestrator.approval.requested":
+      return decodeForEvent(
+        OrchestratorApprovalRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.approval.runId, (run) => ({
+            ...run,
+            approvals: [
+              ...run.approvals.filter((approval) => approval.id !== payload.approval.id),
+              payload.approval,
+            ],
+            updatedAt: payload.approval.requestedAt,
+          })),
+        })),
+      );
+
+    case "orchestrator.approval.resolved":
+      return decodeForEvent(
+        OrchestratorApprovalResolvedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: nextBase.orchestratorRuns.map((run) => {
+            if (!run.approvals.some((approval) => approval.id === payload.approvalId)) {
+              return run;
+            }
+            return {
+              ...run,
+              approvals: run.approvals.map((approval) =>
+                approval.id === payload.approvalId
+                  ? { ...approval, status: payload.status, resolvedAt: payload.resolvedAt }
+                  : approval,
+              ),
+              updatedAt: payload.resolvedAt,
+            };
+          }),
+        })),
+      );
+
+    case "orchestrator.process-rule.proposed":
+      return decodeForEvent(
+        OrchestratorProcessRuleProposedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          if (payload.version.runId === null) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            orchestratorRuns: updateRun(nextBase.orchestratorRuns, payload.version.runId, (run) => ({
+              ...run,
+              processRuleVersions: [
+                ...run.processRuleVersions.filter((version) => version.id !== payload.version.id),
+                payload.version,
+              ],
+              updatedAt: payload.version.updatedAt,
+            })),
+          };
+        }),
+      );
+
+    case "orchestrator.process-rule.status-set":
+      return decodeForEvent(
+        OrchestratorProcessRuleStatusSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          orchestratorRuns: nextBase.orchestratorRuns.map((run) => {
+            if (!run.processRuleVersions.some((version) => version.id === payload.versionId)) {
+              return run;
+            }
+            return {
+              ...run,
+              processRuleVersions: run.processRuleVersions.map((version) =>
+                version.id === payload.versionId
+                  ? { ...version, status: payload.status, updatedAt: payload.updatedAt }
+                  : version,
+              ),
+              updatedAt: payload.updatedAt,
+            };
+          }),
+        })),
+      );
+
+    case "orchestrator.verification.requested":
+      return Effect.succeed(nextBase);
 
     default:
       return Effect.succeed(nextBase);
