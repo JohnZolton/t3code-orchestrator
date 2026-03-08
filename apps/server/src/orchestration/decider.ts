@@ -7,6 +7,10 @@ import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  requireOrchestratorLane,
+  requireOrchestratorLaneAbsent,
+  requireOrchestratorRun,
+  requireOrchestratorRunAbsent,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -673,6 +677,398 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           activity: command.activity,
+        },
+      };
+    }
+
+    case "orchestrator.run.create": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireOrchestratorRunAbsent({
+        readModel,
+        command,
+        runId: command.runId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: command.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.run.created",
+        payload: {
+          run: {
+            id: command.runId,
+            projectId: command.projectId,
+            title: command.title,
+            goal: command.goal,
+            status: "active",
+            latestSynthesis: null,
+            messages: [],
+            lanes: [],
+            dependencies: [],
+            approvals: [],
+            processRuleVersions: [],
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      };
+    }
+
+    case "orchestrator.run.message": {
+      yield* requireOrchestratorRun({
+        readModel,
+        command,
+        runId: command.runId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: command.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.run.message-added",
+        payload: {
+          runId: command.runId,
+          message: command.message,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.run.synthesis.set": {
+      yield* requireOrchestratorRun({
+        readModel,
+        command,
+        runId: command.runId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: command.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.run.synthesis-set",
+        payload: {
+          runId: command.runId,
+          latestSynthesis: command.latestSynthesis,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.lane.create": {
+      yield* requireOrchestratorRun({
+        readModel,
+        command,
+        runId: command.runId,
+      });
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireOrchestratorLaneAbsent({
+        readModel,
+        command,
+        laneId: command.laneId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-lane",
+          aggregateId: command.laneId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.lane.created",
+        payload: {
+          lane: {
+            id: command.laneId,
+            runId: command.runId,
+            threadId: command.threadId,
+            title: command.title,
+            objective: command.objective,
+            status: "ready",
+            blockedReason: null,
+            brief: null,
+            requiredArtifactKinds: command.requiredArtifactKinds,
+            verification: null,
+            artifacts: [],
+            updatedAt: command.createdAt,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+    }
+
+    case "orchestrator.lane.dispatch": {
+      const lane = yield* requireOrchestratorLane({
+        readModel,
+        command,
+        laneId: command.laneId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-lane",
+          aggregateId: command.laneId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.lane.dispatched",
+        payload: {
+          laneId: command.laneId,
+          brief: command.brief,
+          status: lane.status === "completed" ? "completed" : "dispatched",
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.lane.status.set": {
+      const lane = yield* requireOrchestratorLane({
+        readModel,
+        command,
+        laneId: command.laneId,
+      });
+      if (command.status === "completed") {
+        const readyArtifactKinds = new Set(
+          lane.artifacts.filter((artifact) => artifact.status === "ready").map((artifact) => artifact.kind),
+        );
+        for (const requiredKind of lane.requiredArtifactKinds) {
+          if (!readyArtifactKinds.has(requiredKind)) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Lane '${command.laneId}' is missing required artifact '${requiredKind}'.`,
+            });
+          }
+        }
+        if (lane.verification === null || lane.verification.status !== "passed") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Lane '${command.laneId}' cannot complete before verification passes.`,
+          });
+        }
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-lane",
+          aggregateId: command.laneId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.lane.status-set",
+        payload: {
+          laneId: command.laneId,
+          status: command.status,
+          blockedReason: command.blockedReason ?? null,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.lane.dependency.upsert": {
+      yield* requireOrchestratorRun({
+        readModel,
+        command,
+        runId: command.runId,
+      });
+      yield* requireOrchestratorLane({
+        readModel,
+        command,
+        laneId: command.dependency.fromLaneId,
+      });
+      yield* requireOrchestratorLane({
+        readModel,
+        command,
+        laneId: command.dependency.toLaneId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: command.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.lane.dependency-upserted",
+        payload: {
+          runId: command.runId,
+          dependency: command.dependency,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.artifact.upsert": {
+      if (command.artifact.laneId !== null) {
+        yield* requireOrchestratorLane({
+          readModel,
+          command,
+          laneId: command.artifact.laneId,
+        });
+      }
+      yield* requireOrchestratorRun({
+        readModel,
+        command,
+        runId: command.artifact.runId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: command.artifact.laneId === null ? "orchestrator-run" : "orchestrator-lane",
+          aggregateId: command.artifact.laneId ?? command.artifact.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.artifact.upserted",
+        payload: {
+          artifact: command.artifact,
+        },
+      };
+    }
+
+    case "orchestrator.verification.upsert": {
+      yield* requireOrchestratorLane({
+        readModel,
+        command,
+        laneId: command.report.laneId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-lane",
+          aggregateId: command.report.laneId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.verification.upserted",
+        payload: {
+          report: command.report,
+        },
+      };
+    }
+
+    case "orchestrator.lane.verify": {
+      yield* requireOrchestratorLane({
+        readModel,
+        command,
+        laneId: command.laneId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-lane",
+          aggregateId: command.laneId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.verification.requested",
+        payload: {
+          laneId: command.laneId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.approval.request": {
+      yield* requireOrchestratorRun({
+        readModel,
+        command,
+        runId: command.approval.runId,
+      });
+      if (command.approval.laneId !== null) {
+        yield* requireOrchestratorLane({
+          readModel,
+          command,
+          laneId: command.approval.laneId,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: command.approval.laneId === null ? "orchestrator-run" : "orchestrator-lane",
+          aggregateId: command.approval.laneId ?? command.approval.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.approval.requested",
+        payload: {
+          approval: command.approval,
+        },
+      };
+    }
+
+    case "orchestrator.approval.resolve": {
+      const approvalContainerRun = readModel.orchestratorRuns.find((run) =>
+        run.approvals.some((approval) => approval.id === command.approvalId),
+      );
+      if (!approvalContainerRun) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Approval '${command.approvalId}' does not exist.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: approvalContainerRun.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.approval.resolved",
+        payload: {
+          approvalId: command.approvalId,
+          status: command.status,
+          resolvedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "orchestrator.process-rule.propose": {
+      if (command.version.runId === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Process rule proposals must be attached to an orchestrator run in v1.",
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: command.version.runId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.process-rule.proposed",
+        payload: {
+          version: command.version,
+        },
+      };
+    }
+
+    case "orchestrator.process-rule.status.set": {
+      const versionContainerRun = readModel.orchestratorRuns.find((run) =>
+        run.processRuleVersions.some((version) => version.id === command.versionId),
+      );
+      if (!versionContainerRun) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Process rule version '${command.versionId}' does not exist.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "orchestrator-run",
+          aggregateId: versionContainerRun.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "orchestrator.process-rule.status-set",
+        payload: {
+          versionId: command.versionId,
+          status: command.status,
+          updatedAt: command.createdAt,
         },
       };
     }

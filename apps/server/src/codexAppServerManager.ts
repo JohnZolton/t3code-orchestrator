@@ -113,6 +113,7 @@ export interface CodexAppServerSendTurnInput {
   readonly serviceTier?: string | null;
   readonly effort?: string;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly developerInstructions?: string;
 }
 
 export interface CodexAppServerStartSessionInput {
@@ -125,6 +126,13 @@ export interface CodexAppServerStartSessionInput {
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly runtimeMode: RuntimeMode;
+  readonly providerOptions?: {
+    readonly codex?: {
+      readonly binaryPath?: string;
+      readonly homePath?: string;
+      readonly configEntries?: ReadonlyArray<{ key: string; value: unknown }>;
+    };
+  };
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -335,6 +343,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: "default" | "plan";
   readonly model?: string;
   readonly effort?: string;
+  readonly developerInstructions?: string;
 }):
   | {
       mode: "default" | "plan";
@@ -355,9 +364,10 @@ function buildCodexCollaborationMode(input: {
       model,
       reasoning_effort: input.effort ?? "medium",
       developer_instructions:
-        input.interactionMode === "plan"
+        input.developerInstructions ??
+        (input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS),
     },
   };
 }
@@ -459,12 +469,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const codexBinaryPath = input.binaryPath;
       const codexHomePath = input.homePath;
+      const codexOptions = readCodexProviderOptions(input);
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const codexArgs = [
+        ...(codexOptions.configEntries ?? []).flatMap((entry) => [
+          "--config",
+          `${entry.key}=${serializeCodexConfigValue(entry.value)}`,
+        ]),
+        "app-server",
+      ];
+      const child = spawn(codexBinaryPath, codexArgs, {
         cwd: resolvedCwd,
         env: {
           ...process.env,
@@ -718,6 +736,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
+      ...(input.developerInstructions !== undefined
+        ? { developerInstructions: input.developerInstructions }
+        : {}),
     });
     if (collaborationMode) {
       if (!turnStartParams.model) {
@@ -1522,6 +1543,22 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
   return brandIfNonEmpty(value, (normalized) => normalized);
 }
 
+function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
+  readonly binaryPath?: string;
+  readonly homePath?: string;
+  readonly configEntries?: ReadonlyArray<{ key: string; value: unknown }>;
+} {
+  const options = input.providerOptions?.codex;
+  if (!options) {
+    return {};
+  }
+  return {
+    ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
+    ...(options.homePath ? { homePath: options.homePath } : {}),
+    ...(options.configEntries ? { configEntries: options.configEntries } : {}),
+  };
+}
+
 function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
@@ -1565,6 +1602,24 @@ function assertSupportedCodexCliVersion(input: {
   if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
     throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
   }
+}
+
+function serializeCodexConfigValue(value: unknown): string {
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => serializeCodexConfigValue(entry)).join(", ")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{ ${Object.entries(value)
+      .map(([key, entryValue]) => `${key} = ${serializeCodexConfigValue(entryValue)}`)
+      .join(", ")} }`;
+  }
+  throw new Error(`Unsupported Codex config override value: ${String(value)}`);
 }
 
 function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {

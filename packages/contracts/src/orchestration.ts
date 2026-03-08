@@ -8,6 +8,11 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
+  OrchestratorApprovalId,
+  OrchestratorArtifactId,
+  OrchestratorLaneId,
+  OrchestratorRunId,
+  ProcessRuleVersionId,
   ProjectId,
   ProviderItemId,
   ThreadId,
@@ -294,10 +299,210 @@ export const OrchestrationThread = Schema.Struct({
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
+export const OrchestratorRunStatus = Schema.Literals([
+  "draft",
+  "active",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export type OrchestratorRunStatus = typeof OrchestratorRunStatus.Type;
+
+export const OrchestratorLaneStatus = Schema.Literals([
+  "draft",
+  "ready",
+  "dispatched",
+  "running",
+  "blocked",
+  "awaiting-verification",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export type OrchestratorLaneStatus = typeof OrchestratorLaneStatus.Type;
+
+export const OrchestratorArtifactKind = Schema.Literals([
+  "change-manifest",
+  "acceptance-checklist",
+  "verification-output",
+  "summary",
+  "prompt-patch",
+  "audit-log",
+]);
+export type OrchestratorArtifactKind = typeof OrchestratorArtifactKind.Type;
+
+export const OrchestratorArtifactStatus = Schema.Literals([
+  "missing",
+  "draft",
+  "ready",
+  "superseded",
+]);
+export type OrchestratorArtifactStatus = typeof OrchestratorArtifactStatus.Type;
+
+export const OrchestratorVerificationStatus = Schema.Literals([
+  "not-run",
+  "running",
+  "passed",
+  "failed",
+]);
+export type OrchestratorVerificationStatus = typeof OrchestratorVerificationStatus.Type;
+
+export const OrchestratorApprovalType = Schema.Literals([
+  "strategy-shift",
+  "prompt-self-edit",
+  "remote-destructive-action",
+]);
+export type OrchestratorApprovalType = typeof OrchestratorApprovalType.Type;
+
+export const OrchestratorApprovalStatus = Schema.Literals([
+  "pending",
+  "approved",
+  "rejected",
+  "cancelled",
+]);
+export type OrchestratorApprovalStatus = typeof OrchestratorApprovalStatus.Type;
+
+export const ProcessRuleVersionStatus = Schema.Literals([
+  "proposed",
+  "approved",
+  "applied",
+  "rolled-back",
+  "rejected",
+]);
+export type ProcessRuleVersionStatus = typeof ProcessRuleVersionStatus.Type;
+
+export const OrchestratorChatMessageRole = Schema.Literals(["user", "assistant", "system"]);
+export type OrchestratorChatMessageRole = typeof OrchestratorChatMessageRole.Type;
+
+export const OrchestratorChatMessage = Schema.Struct({
+  id: MessageId,
+  role: OrchestratorChatMessageRole,
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type OrchestratorChatMessage = typeof OrchestratorChatMessage.Type;
+
+export const OrchestratorWorkerBrief = Schema.Struct({
+  objective: TrimmedNonEmptyString,
+  successCriteria: Schema.Array(TrimmedNonEmptyString),
+  hardRequirements: Schema.Array(TrimmedNonEmptyString),
+  orderedPhases: Schema.Array(TrimmedNonEmptyString),
+  requiredArtifacts: Schema.Array(OrchestratorArtifactKind),
+  constraints: Schema.Array(TrimmedNonEmptyString),
+  failureHandling: TrimmedNonEmptyString,
+  strategicContext: TrimmedNonEmptyString,
+  implementationContext: TrimmedNonEmptyString,
+  dispatchPrompt: TrimmedNonEmptyString,
+});
+export type OrchestratorWorkerBrief = typeof OrchestratorWorkerBrief.Type;
+
+export const OrchestratorLaneDependency = Schema.Struct({
+  fromLaneId: OrchestratorLaneId,
+  toLaneId: OrchestratorLaneId,
+  createdAt: IsoDateTime,
+});
+export type OrchestratorLaneDependency = typeof OrchestratorLaneDependency.Type;
+
+export const OrchestratorArtifact = Schema.Struct({
+  id: OrchestratorArtifactId,
+  laneId: Schema.NullOr(OrchestratorLaneId),
+  runId: OrchestratorRunId,
+  kind: OrchestratorArtifactKind,
+  status: OrchestratorArtifactStatus,
+  title: TrimmedNonEmptyString,
+  payload: Schema.Unknown,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestratorArtifact = typeof OrchestratorArtifact.Type;
+
+export const OrchestratorVerificationReport = Schema.Struct({
+  laneId: OrchestratorLaneId,
+  status: OrchestratorVerificationStatus,
+  requiredCommands: Schema.Array(TrimmedNonEmptyString),
+  commandResults: Schema.Array(
+    Schema.Struct({
+      command: TrimmedNonEmptyString,
+      exitCode: Schema.NullOr(Schema.Int),
+      stdout: Schema.String,
+      stderr: Schema.String,
+      startedAt: IsoDateTime,
+      completedAt: IsoDateTime,
+    }),
+  ),
+  contradictions: Schema.Array(TrimmedNonEmptyString),
+  updatedAt: IsoDateTime,
+});
+export type OrchestratorVerificationReport = typeof OrchestratorVerificationReport.Type;
+
+export const OrchestratorApprovalItem = Schema.Struct({
+  id: OrchestratorApprovalId,
+  runId: OrchestratorRunId,
+  laneId: Schema.NullOr(OrchestratorLaneId),
+  type: OrchestratorApprovalType,
+  status: OrchestratorApprovalStatus,
+  title: TrimmedNonEmptyString,
+  rationale: TrimmedNonEmptyString,
+  requestedAt: IsoDateTime,
+  resolvedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestratorApprovalItem = typeof OrchestratorApprovalItem.Type;
+
+export const ProcessRuleVersion = Schema.Struct({
+  id: ProcessRuleVersionId,
+  runId: Schema.NullOr(OrchestratorRunId),
+  status: ProcessRuleVersionStatus,
+  title: TrimmedNonEmptyString,
+  rationale: TrimmedNonEmptyString,
+  expectedBehaviorDelta: TrimmedNonEmptyString,
+  riskLevel: TrimmedNonEmptyString,
+  rollbackInstruction: TrimmedNonEmptyString,
+  patch: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ProcessRuleVersion = typeof ProcessRuleVersion.Type;
+
+export const OrchestratorLane = Schema.Struct({
+  id: OrchestratorLaneId,
+  runId: OrchestratorRunId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  objective: TrimmedNonEmptyString,
+  status: OrchestratorLaneStatus,
+  blockedReason: Schema.NullOr(TrimmedNonEmptyString),
+  brief: Schema.NullOr(OrchestratorWorkerBrief),
+  requiredArtifactKinds: Schema.Array(OrchestratorArtifactKind),
+  verification: Schema.NullOr(OrchestratorVerificationReport),
+  artifacts: Schema.Array(OrchestratorArtifact),
+  updatedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+export type OrchestratorLane = typeof OrchestratorLane.Type;
+
+export const OrchestratorRun = Schema.Struct({
+  id: OrchestratorRunId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  goal: TrimmedNonEmptyString,
+  status: OrchestratorRunStatus,
+  latestSynthesis: Schema.NullOr(Schema.String),
+  messages: Schema.Array(OrchestratorChatMessage),
+  lanes: Schema.Array(OrchestratorLane),
+  dependencies: Schema.Array(OrchestratorLaneDependency),
+  approvals: Schema.Array(OrchestratorApprovalItem),
+  processRuleVersions: Schema.Array(ProcessRuleVersion),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestratorRun = typeof OrchestratorRun.Type;
+
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  orchestratorRuns: Schema.Array(OrchestratorRun).pipe(Schema.withDecodingDefault(() => [])),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -467,6 +672,120 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const OrchestratorRunCreateCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.run.create"),
+  commandId: CommandId,
+  runId: OrchestratorRunId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  goal: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorRunMessageCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.run.message"),
+  commandId: CommandId,
+  runId: OrchestratorRunId,
+  message: OrchestratorChatMessage,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorRunSynthesisSetCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.run.synthesis.set"),
+  commandId: CommandId,
+  runId: OrchestratorRunId,
+  latestSynthesis: Schema.String,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorLaneCreateCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.lane.create"),
+  commandId: CommandId,
+  laneId: OrchestratorLaneId,
+  runId: OrchestratorRunId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  objective: TrimmedNonEmptyString,
+  requiredArtifactKinds: Schema.Array(OrchestratorArtifactKind),
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorLaneDispatchCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.lane.dispatch"),
+  commandId: CommandId,
+  laneId: OrchestratorLaneId,
+  brief: OrchestratorWorkerBrief,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorLaneStatusSetCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.lane.status.set"),
+  commandId: CommandId,
+  laneId: OrchestratorLaneId,
+  status: OrchestratorLaneStatus,
+  blockedReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorLaneDependencyUpsertCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.lane.dependency.upsert"),
+  commandId: CommandId,
+  runId: OrchestratorRunId,
+  dependency: OrchestratorLaneDependency,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorArtifactUpsertCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.artifact.upsert"),
+  commandId: CommandId,
+  artifact: OrchestratorArtifact,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorVerificationReportUpsertCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.verification.upsert"),
+  commandId: CommandId,
+  report: OrchestratorVerificationReport,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorLaneVerifyCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.lane.verify"),
+  commandId: CommandId,
+  laneId: OrchestratorLaneId,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorApprovalRequestCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.approval.request"),
+  commandId: CommandId,
+  approval: OrchestratorApprovalItem,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorApprovalResolveCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.approval.resolve"),
+  commandId: CommandId,
+  approvalId: OrchestratorApprovalId,
+  status: Schema.Literals(["approved", "rejected", "cancelled"]),
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorProcessRuleProposeCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.process-rule.propose"),
+  commandId: CommandId,
+  version: ProcessRuleVersion,
+  createdAt: IsoDateTime,
+});
+
+const OrchestratorProcessRuleStatusSetCommand = Schema.Struct({
+  type: Schema.Literal("orchestrator.process-rule.status.set"),
+  commandId: CommandId,
+  versionId: ProcessRuleVersionId,
+  status: ProcessRuleVersionStatus,
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -484,6 +803,20 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  OrchestratorRunCreateCommand,
+  OrchestratorRunMessageCommand,
+  OrchestratorRunSynthesisSetCommand,
+  OrchestratorLaneCreateCommand,
+  OrchestratorLaneDispatchCommand,
+  OrchestratorLaneStatusSetCommand,
+  OrchestratorLaneDependencyUpsertCommand,
+  OrchestratorArtifactUpsertCommand,
+  OrchestratorVerificationReportUpsertCommand,
+  OrchestratorLaneVerifyCommand,
+  OrchestratorApprovalRequestCommand,
+  OrchestratorApprovalResolveCommand,
+  OrchestratorProcessRuleProposeCommand,
+  OrchestratorProcessRuleStatusSetCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -505,6 +838,20 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  OrchestratorRunCreateCommand,
+  OrchestratorRunMessageCommand,
+  OrchestratorRunSynthesisSetCommand,
+  OrchestratorLaneCreateCommand,
+  OrchestratorLaneDispatchCommand,
+  OrchestratorLaneStatusSetCommand,
+  OrchestratorLaneDependencyUpsertCommand,
+  OrchestratorArtifactUpsertCommand,
+  OrchestratorVerificationReportUpsertCommand,
+  OrchestratorLaneVerifyCommand,
+  OrchestratorApprovalRequestCommand,
+  OrchestratorApprovalResolveCommand,
+  OrchestratorProcessRuleProposeCommand,
+  OrchestratorProcessRuleStatusSetCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -613,10 +960,29 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "orchestrator.run.created",
+  "orchestrator.run.message-added",
+  "orchestrator.run.synthesis-set",
+  "orchestrator.lane.created",
+  "orchestrator.lane.dispatched",
+  "orchestrator.lane.status-set",
+  "orchestrator.lane.dependency-upserted",
+  "orchestrator.artifact.upserted",
+  "orchestrator.verification.requested",
+  "orchestrator.verification.upserted",
+  "orchestrator.approval.requested",
+  "orchestrator.approval.resolved",
+  "orchestrator.process-rule.proposed",
+  "orchestrator.process-rule.status-set",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals([
+  "project",
+  "thread",
+  "orchestrator-run",
+  "orchestrator-lane",
+]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -785,6 +1151,79 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const OrchestratorRunCreatedPayload = Schema.Struct({
+  run: OrchestratorRun,
+});
+
+export const OrchestratorRunMessageAddedPayload = Schema.Struct({
+  runId: OrchestratorRunId,
+  message: OrchestratorChatMessage,
+  updatedAt: IsoDateTime,
+});
+
+export const OrchestratorRunSynthesisSetPayload = Schema.Struct({
+  runId: OrchestratorRunId,
+  latestSynthesis: Schema.String,
+  updatedAt: IsoDateTime,
+});
+
+export const OrchestratorLaneCreatedPayload = Schema.Struct({
+  lane: OrchestratorLane,
+});
+
+export const OrchestratorLaneDispatchedPayload = Schema.Struct({
+  laneId: OrchestratorLaneId,
+  brief: OrchestratorWorkerBrief,
+  status: OrchestratorLaneStatus,
+  updatedAt: IsoDateTime,
+});
+
+export const OrchestratorLaneStatusSetPayload = Schema.Struct({
+  laneId: OrchestratorLaneId,
+  status: OrchestratorLaneStatus,
+  blockedReason: Schema.NullOr(TrimmedNonEmptyString),
+  updatedAt: IsoDateTime,
+});
+
+export const OrchestratorLaneDependencyUpsertedPayload = Schema.Struct({
+  runId: OrchestratorRunId,
+  dependency: OrchestratorLaneDependency,
+  updatedAt: IsoDateTime,
+});
+
+export const OrchestratorArtifactUpsertedPayload = Schema.Struct({
+  artifact: OrchestratorArtifact,
+});
+
+export const OrchestratorVerificationUpsertedPayload = Schema.Struct({
+  report: OrchestratorVerificationReport,
+});
+
+export const OrchestratorVerificationRequestedPayload = Schema.Struct({
+  laneId: OrchestratorLaneId,
+  createdAt: IsoDateTime,
+});
+
+export const OrchestratorApprovalRequestedPayload = Schema.Struct({
+  approval: OrchestratorApprovalItem,
+});
+
+export const OrchestratorApprovalResolvedPayload = Schema.Struct({
+  approvalId: OrchestratorApprovalId,
+  status: Schema.Literals(["approved", "rejected", "cancelled"]),
+  resolvedAt: IsoDateTime,
+});
+
+export const OrchestratorProcessRuleProposedPayload = Schema.Struct({
+  version: ProcessRuleVersion,
+});
+
+export const OrchestratorProcessRuleStatusSetPayload = Schema.Struct({
+  versionId: ProcessRuleVersionId,
+  status: ProcessRuleVersionStatus,
+  updatedAt: IsoDateTime,
+});
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
@@ -798,11 +1237,25 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId, OrchestratorRunId, OrchestratorLaneId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
   correlationId: Schema.NullOr(CommandId),
+  metadata: OrchestrationEventMetadata,
+} as const;
+
+const PersistedEventBaseFields = {
+  sequence: NonNegativeInt,
+  eventId: EventId,
+  aggregateKind: OrchestrationAggregateKind,
+  streamId: Schema.Union([ProjectId, ThreadId, OrchestratorRunId, OrchestratorLaneId]),
+  streamVersion: NonNegativeInt,
+  occurredAt: IsoDateTime,
+  commandId: Schema.NullOr(CommandId),
+  causationEventId: Schema.NullOr(EventId),
+  correlationId: Schema.NullOr(CommandId),
+  actorKind: OrchestrationActorKind,
   metadata: OrchestrationEventMetadata,
 } as const;
 
@@ -917,8 +1370,252 @@ export const OrchestrationEvent = Schema.Union([
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
   }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.run.created"),
+    payload: OrchestratorRunCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.run.message-added"),
+    payload: OrchestratorRunMessageAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.run.synthesis-set"),
+    payload: OrchestratorRunSynthesisSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.lane.created"),
+    payload: OrchestratorLaneCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.lane.dispatched"),
+    payload: OrchestratorLaneDispatchedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.lane.status-set"),
+    payload: OrchestratorLaneStatusSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.lane.dependency-upserted"),
+    payload: OrchestratorLaneDependencyUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.artifact.upserted"),
+    payload: OrchestratorArtifactUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.verification.requested"),
+    payload: OrchestratorVerificationRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.verification.upserted"),
+    payload: OrchestratorVerificationUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.approval.requested"),
+    payload: OrchestratorApprovalRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.approval.resolved"),
+    payload: OrchestratorApprovalResolvedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.process-rule.proposed"),
+    payload: OrchestratorProcessRuleProposedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("orchestrator.process-rule.status-set"),
+    payload: OrchestratorProcessRuleStatusSetPayload,
+  }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
+
+export const OrchestrationPersistedEvent = Schema.Union([
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.created"),
+    payload: ProjectCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.meta-updated"),
+    payload: ProjectMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.deleted"),
+    payload: ProjectDeletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.created"),
+    payload: ThreadCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.deleted"),
+    payload: ThreadDeletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.meta-updated"),
+    payload: ThreadMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.runtime-mode-set"),
+    payload: ThreadRuntimeModeSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.interaction-mode-set"),
+    payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.message-sent"),
+    payload: ThreadMessageSentPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.turn-start-requested"),
+    payload: ThreadTurnStartRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.turn-interrupt-requested"),
+    payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.approval-response-requested"),
+    payload: ThreadApprovalResponseRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.user-input-response-requested"),
+    payload: ThreadUserInputResponseRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.checkpoint-revert-requested"),
+    payload: ThreadCheckpointRevertRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.reverted"),
+    payload: ThreadRevertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.session-stop-requested"),
+    payload: ThreadSessionStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.session-set"),
+    payload: ThreadSessionSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.proposed-plan-upserted"),
+    payload: ThreadProposedPlanUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.turn-diff-completed"),
+    payload: ThreadTurnDiffCompletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.activity-appended"),
+    payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.run.created"),
+    payload: OrchestratorRunCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.run.message-added"),
+    payload: OrchestratorRunMessageAddedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.run.synthesis-set"),
+    payload: OrchestratorRunSynthesisSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.lane.created"),
+    payload: OrchestratorLaneCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.lane.dispatched"),
+    payload: OrchestratorLaneDispatchedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.lane.status-set"),
+    payload: OrchestratorLaneStatusSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.lane.dependency-upserted"),
+    payload: OrchestratorLaneDependencyUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.artifact.upserted"),
+    payload: OrchestratorArtifactUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.verification.requested"),
+    payload: OrchestratorVerificationRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.verification.upserted"),
+    payload: OrchestratorVerificationUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.approval.requested"),
+    payload: OrchestratorApprovalRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.approval.resolved"),
+    payload: OrchestratorApprovalResolvedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.process-rule.proposed"),
+    payload: OrchestratorProcessRuleProposedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("orchestrator.process-rule.status-set"),
+    payload: OrchestratorProcessRuleStatusSetPayload,
+  }),
+]);
+export type OrchestrationPersistedEvent = typeof OrchestrationPersistedEvent.Type;
 
 export const OrchestrationCommandReceiptStatus = Schema.Literals(["accepted", "rejected"]);
 export type OrchestrationCommandReceiptStatus = typeof OrchestrationCommandReceiptStatus.Type;

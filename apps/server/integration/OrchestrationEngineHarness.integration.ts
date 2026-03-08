@@ -45,6 +45,9 @@ import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import { OrchestratorActionReactorLive } from "../src/orchestration/Layers/OrchestratorActionReactor.ts";
+import { OrchestratorMessageReactorLive } from "../src/orchestration/Layers/OrchestratorMessageReactor.ts";
+import { OrchestratorVerificationReactorLive } from "../src/orchestration/Layers/OrchestratorVerificationReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
@@ -325,10 +328,22 @@ export const makeOrchestrationIntegrationHarness = (
         ),
       ),
     );
+    const orchestratorVerificationReactorLayer = OrchestratorVerificationReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
+    const orchestratorActionReactorLayer = OrchestratorActionReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
+    const orchestratorMessageReactorLayer = OrchestratorMessageReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(orchestratorActionReactorLayer),
+      Layer.provideMerge(orchestratorMessageReactorLayer),
+      Layer.provideMerge(orchestratorVerificationReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),

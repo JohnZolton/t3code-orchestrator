@@ -36,6 +36,8 @@ const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
 const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
+const ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
+const ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
@@ -518,6 +520,15 @@ const make = Effect.fn("make")(function* () {
     lookup: () => Effect.succeed(""),
   });
 
+  const assistantMessageStateByMessageId = yield* Cache.make<
+    MessageId,
+    { sawDelta: boolean; finalized: boolean }
+  >({
+    capacity: ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_CACHE_CAPACITY,
+    timeToLive: ASSISTANT_MESSAGE_STATE_BY_MESSAGE_ID_TTL,
+    lookup: () => Effect.succeed({ sawDelta: false, finalized: false }),
+  });
+
   const bufferedProposedPlanById = yield* Cache.make<string, { text: string; createdAt: string }>({
     capacity: BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
@@ -617,6 +628,33 @@ const make = Effect.fn("make")(function* () {
   const clearBufferedAssistantText = (messageId: MessageId) =>
     Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
 
+  const markAssistantMessageSawDelta = (messageId: MessageId) =>
+    Cache.getOption(assistantMessageStateByMessageId, messageId).pipe(
+      Effect.flatMap((existingState) =>
+        Cache.set(assistantMessageStateByMessageId, messageId, {
+          sawDelta: Option.getOrElse(existingState, () => ({ sawDelta: false, finalized: false })).sawDelta || true,
+          finalized: Option.getOrElse(existingState, () => ({ sawDelta: false, finalized: false })).finalized,
+        }),
+      ),
+    );
+
+  const getAssistantMessageState = (messageId: MessageId) =>
+    Cache.getOption(assistantMessageStateByMessageId, messageId).pipe(
+      Effect.map((existingState) =>
+        Option.getOrElse(existingState, () => ({ sawDelta: false, finalized: false })),
+      ),
+    );
+
+  const markAssistantMessageFinalized = (messageId: MessageId) =>
+    getAssistantMessageState(messageId).pipe(
+      Effect.flatMap((state) =>
+        Cache.set(assistantMessageStateByMessageId, messageId, {
+          ...state,
+          finalized: true,
+        }),
+      ),
+    );
+
   const appendBufferedProposedPlan = (planId: string, delta: string, createdAt: string) =>
     Cache.getOption(bufferedProposedPlanById, planId).pipe(
       Effect.flatMap((existingEntry) => {
@@ -654,13 +692,20 @@ const make = Effect.fn("make")(function* () {
     finalDeltaCommandTag: string;
     fallbackText?: string;
   }) {
+    const messageState = yield* getAssistantMessageState(input.messageId);
+    if (messageState.finalized) {
+      return;
+    }
+
     const bufferedText = yield* takeBufferedAssistantText(input.messageId);
     const text =
       bufferedText.length > 0
         ? bufferedText
-        : (input.fallbackText?.trim().length ?? 0) > 0
-          ? input.fallbackText!
-          : "";
+        : messageState.sawDelta
+          ? ""
+          : (input.fallbackText?.trim().length ?? 0) > 0
+            ? input.fallbackText!
+            : "";
 
     if (text.length > 0) {
       yield* orchestrationEngine.dispatch({
@@ -673,6 +718,7 @@ const make = Effect.fn("make")(function* () {
         createdAt: input.createdAt,
       });
     }
+    yield* markAssistantMessageFinalized(input.messageId);
 
     yield* orchestrationEngine.dispatch({
       type: "thread.message.assistant.complete",
@@ -1008,6 +1054,7 @@ const make = Effect.fn("make")(function* () {
         yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
       }
 
+      yield* markAssistantMessageSawDelta(assistantMessageId);
       const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
         serverSettingsService.getSettings,
         (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),

@@ -62,6 +62,8 @@ function makeState(thread: Thread): AppState {
     ],
     threads: [thread],
     bootstrapComplete: true,
+    orchestratorRuns: [],
+    threadsHydrated: true,
   };
 }
 
@@ -139,6 +141,7 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
       },
     ],
     threads: [thread],
+    orchestratorRuns: [],
   };
 }
 

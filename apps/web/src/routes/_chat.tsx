@@ -1,8 +1,12 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
+import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
+import OrchestratorPane from "../components/OrchestratorPane";
+import ThreadSidebar from "../components/Sidebar";
+import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -13,6 +17,7 @@ import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useSettings } from "~/hooks/useSettings";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const ORCHESTRATOR_COLLAPSED_KEY = "t3code:orchestrator-collapsed";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -92,11 +97,47 @@ function ChatRouteGlobalShortcuts() {
 }
 
 function ChatRouteLayout() {
+  const [isOrchestratorCollapsed, setIsOrchestratorCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(ORCHESTRATOR_COLLAPSED_KEY) === "1";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(ORCHESTRATOR_COLLAPSED_KEY, isOrchestratorCollapsed ? "1" : "0");
+  }, [isOrchestratorCollapsed]);
+
   return (
-    <>
-      <ChatRouteGlobalShortcuts />
-      <Outlet />
-    </>
+    <div
+      className="flex h-dvh min-h-0 min-w-0 bg-background text-foreground"
+      style={{
+        ["--orchestrator-width" as string]: isOrchestratorCollapsed ? "0rem" : "22rem",
+      }}
+    >
+      <div className="hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out md:block md:w-[var(--orchestrator-width)]">
+        <OrchestratorPane />
+      </div>
+      <SidebarProvider defaultOpen>
+        <Sidebar
+          side="left"
+          collapsible="offcanvas"
+          className="border-r border-border bg-card text-foreground md:left-[var(--orchestrator-width)] md:transition-[left,right,width] md:duration-300 md:ease-in-out md:group-data-[collapsible=offcanvas]:left-[calc(var(--orchestrator-width)-var(--sidebar-width))]"
+        >
+          <ThreadSidebar
+            isOrchestratorCollapsed={isOrchestratorCollapsed}
+            onToggleOrchestrator={() => setIsOrchestratorCollapsed((value) => !value)}
+          />
+        </Sidebar>
+        <DiffWorkerPoolProvider>
+          <ChatRouteGlobalShortcuts />
+          <Outlet />
+        </DiffWorkerPoolProvider>
+      </SidebarProvider>
+    </div>
   );
 }
 

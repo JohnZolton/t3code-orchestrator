@@ -2,6 +2,8 @@ import {
   type OrchestrationEvent,
   type OrchestrationMessage,
   type OrchestrationProposedPlan,
+  DEFAULT_MODEL_BY_PROVIDER,
+  type OrchestratorRun,
   type ProviderKind,
   ThreadId,
   type OrchestrationReadModel,
@@ -20,12 +22,16 @@ export interface AppState {
   projects: Project[];
   threads: Thread[];
   bootstrapComplete: boolean;
+  orchestratorRuns: OrchestratorRun[];
+  threadsHydrated: boolean;
 }
 
 const initialState: AppState = {
   projects: [],
   threads: [],
   bootstrapComplete: false,
+  orchestratorRuns: [],
+  threadsHydrated: false,
 };
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
@@ -410,6 +416,8 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     projects,
     threads,
     bootstrapComplete: true,
+    orchestratorRuns: readModel.orchestratorRuns.map((run) => ({ ...run })),
+    threadsHydrated: true,
   };
 }
 

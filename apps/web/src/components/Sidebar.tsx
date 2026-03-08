@@ -4,6 +4,8 @@ import {
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
   PlusIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -54,7 +56,8 @@ import {
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isLinuxPlatform, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
+import { isLinuxPlatform, isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
+import { isOrchestratorThread } from "../orchestratorThread";
 import { useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import {
@@ -437,7 +440,10 @@ function SortableProjectItem({
   );
 }
 
-export default function Sidebar() {
+export default function Sidebar(props: {
+  isOrchestratorCollapsed: boolean;
+  onToggleOrchestrator: () => void;
+}) {
   const projects = useStore((store) => store.projects);
   const serverThreads = useStore((store) => store.threads);
   const { projectExpandedById, projectOrder, threadLastVisitedAtById } = useUiStateStore(
@@ -525,6 +531,18 @@ export default function Sidebar() {
       ),
     [serverThreads, threadLastVisitedAtById],
   );
+  const visibleThreads = useMemo(
+    () => threads.filter((thread) => !isOrchestratorThread(thread)),
+    [threads],
+  );
+  const pendingApprovalByThreadId = useMemo(() => {
+    const map = new Map<ThreadId, boolean>();
+    for (const thread of visibleThreads) {
+      map.set(thread.id, derivePendingApprovals(thread.activities).length > 0);
+    }
+    return map;
+  }, [visibleThreads]);
+  );
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -544,12 +562,12 @@ export default function Sidebar() {
   );
   const threadGitTargets = useMemo(
     () =>
-      threads.map((thread) => ({
+      visibleThreads.map((thread) => ({
         threadId: thread.id,
         branch: thread.branch,
         cwd: thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null,
       })),
-    [projectCwdById, threads],
+    [projectCwdById, visibleThreads],
   );
   const threadGitStatusCwds = useMemo(
     () => [
@@ -890,16 +908,106 @@ export default function Sidebar() {
           return;
         }
       }
-      await deleteThread(threadId);
+      const threadProject = projects.find((project) => project.id === thread.projectId);
+      const orphanedWorktreePath = getOrphanedWorktreePathForThread(threads, threadId);
+      const displayWorktreePath = orphanedWorktreePath
+        ? formatWorktreePathForDisplay(orphanedWorktreePath)
+        : null;
+      const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== undefined;
+      const shouldDeleteWorktree =
+        canDeleteWorktree &&
+        (await api.dialogs.confirm(
+          [
+            "This thread is the only one linked to this worktree:",
+            displayWorktreePath ?? orphanedWorktreePath,
+            "",
+            "Delete the worktree too?",
+          ].join("\n"),
+        ));
+
+      if (thread.session && thread.session.status !== "closed") {
+        await api.orchestration
+          .dispatchCommand({
+            type: "thread.session.stop",
+            commandId: newCommandId(),
+            threadId,
+            createdAt: new Date().toISOString(),
+          })
+          .catch(() => undefined);
+      }
+
+      try {
+        await api.terminal.close({
+          threadId,
+          deleteHistory: true,
+        });
+      } catch {
+        // Terminal may already be closed
+      }
+
+      const shouldNavigateToFallback = routeThreadId === threadId;
+      const fallbackThreadId = visibleThreads.find((entry) => entry.id !== threadId)?.id ?? null;
+      await api.orchestration.dispatchCommand({
+        type: "thread.delete",
+        commandId: newCommandId(),
+        threadId,
+      });
+      clearComposerDraftForThread(threadId);
+      clearProjectDraftThreadById(thread.projectId, thread.id);
+      clearTerminalState(threadId);
+      if (shouldNavigateToFallback) {
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void navigate({ to: "/", replace: true });
+        }
+      }
+
+      if (!shouldDeleteWorktree || !orphanedWorktreePath || !threadProject) {
+        return;
+      }
+
+      try {
+        await removeWorktreeMutation.mutateAsync({
+          cwd: threadProject.cwd,
+          path: orphanedWorktreePath,
+          force: true,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
+        console.error("Failed to remove orphaned worktree after thread deletion", {
+          threadId,
+          projectCwd: threadProject.cwd,
+          worktreePath: orphanedWorktreePath,
+          error,
+        });
+        toastManager.add({
+          type: "error",
+          title: "Thread deleted, but worktree removal failed",
+          description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
+        });
+      }
     },
     [
       appSettings.confirmThreadDelete,
+      clearComposerDraftForThread,
+      clearProjectDraftThreadById,
+      clearTerminalState,
       copyPathToClipboard,
       copyThreadIdToClipboard,
-      deleteThread,
       markThreadUnread,
+      navigate,
       projectCwdById,
+      projects,
+      removeWorktreeMutation,
+      routeThreadId,
       threads,
+      toastManager,
+      visibleThreads,
     ],
   );
 
@@ -1029,7 +1137,7 @@ export default function Sidebar() {
       }
       if (clicked !== "delete") return;
 
-      const projectThreads = threads.filter((thread) => thread.projectId === projectId);
+      const projectThreads = visibleThreads.filter((thread) => thread.projectId === projectId);
       if (projectThreads.length > 0) {
         toastManager.add({
           type: "warning",
@@ -1069,7 +1177,7 @@ export default function Sidebar() {
       copyPathToClipboard,
       getDraftThreadByProjectId,
       projects,
-      threads,
+      visibleThreads,
     ],
   );
 
@@ -1957,6 +2065,27 @@ export default function Sidebar() {
         />
         <TooltipPopup side="bottom" sideOffset={2}>
           Version {APP_VERSION}
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={props.isOrchestratorCollapsed ? "Show orchestrator" : "Hide orchestrator"}
+              className="hidden size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:inline-flex"
+              onClick={props.onToggleOrchestrator}
+            >
+              {props.isOrchestratorCollapsed ? (
+                <PanelLeftOpenIcon className="size-3.5" />
+              ) : (
+                <PanelLeftCloseIcon className="size-3.5" />
+              )}
+            </button>
+          }
+        />
+        <TooltipPopup side="bottom">
+          {props.isOrchestratorCollapsed ? "Show orchestrator" : "Hide orchestrator"}
         </TooltipPopup>
       </Tooltip>
     </div>

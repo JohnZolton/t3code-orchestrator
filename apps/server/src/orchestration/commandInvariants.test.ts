@@ -51,6 +51,7 @@ const readModel: OrchestrationReadModel = {
       deletedAt: null,
     },
   ],
+  orchestratorRuns: [],
   threads: [
     {
       id: ThreadId.makeUnsafe("thread-1"),

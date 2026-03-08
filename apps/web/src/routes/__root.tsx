@@ -33,6 +33,7 @@ import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { deriveOrchestrationBatchEffects } from "../orchestrationEventEffects";
 import { createOrchestrationRecoveryCoordinator } from "../orchestrationRecovery";
+import { projectOrchestratorRuns } from "../orchestratorProjection";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;

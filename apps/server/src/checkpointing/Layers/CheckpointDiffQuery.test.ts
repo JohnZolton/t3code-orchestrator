@@ -38,6 +38,7 @@ function makeSnapshot(input: {
         deletedAt: null,
       },
     ],
+    orchestratorRuns: [],
     threads: [
       {
         id: input.threadId,
@@ -175,12 +176,13 @@ describe("CheckpointDiffQueryLive", () => {
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "2026-01-01T00:00:00.000Z",
-            } satisfies OrchestrationReadModel),
+             Effect.succeed({
+               snapshotSequence: 0,
+               projects: [],
+               threads: [],
+               orchestratorRuns: [],
+               updatedAt: "2026-01-01T00:00:00.000Z",
+             } satisfies OrchestrationReadModel),
         }),
       ),
     );

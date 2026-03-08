@@ -14,6 +14,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
+  type OrchestrationReadModel,
   type OrchestrationCommand,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -81,6 +82,7 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePaths } from "./workspace/Services/WorkspacePaths.ts";
+import { handleOrchestratorMcpRequest } from "./orchestratorMcpServer.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -391,6 +393,22 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       Effect.gen(function* () {
         const url = new URL(req.url ?? "/", `http://localhost:${port}`);
         if (yield* tryHandleProjectFaviconRequest(url, res)) {
+          return;
+        }
+
+        if (url.pathname === "/mcp/orchestrator") {
+          yield* Effect.tryPromise({
+            try: () =>
+              handleOrchestratorMcpRequest(req, res, {
+                getReadModel: async () =>
+                  (await runPromise(orchestrationEngine.getReadModel())) as OrchestrationReadModel,
+                dispatch: (command) => runPromise(orchestrationEngine.dispatch(command)),
+              }),
+            catch: (cause) =>
+              new RouteRequestError({
+                message: `Failed to handle orchestrator MCP request: ${String(cause)}`,
+              }),
+          });
           return;
         }
 

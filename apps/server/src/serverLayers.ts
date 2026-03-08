@@ -10,7 +10,9 @@ import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationE
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import { OrchestrationEngineLive } from "./orchestration/Layers/OrchestrationEngine";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
+import { OrchestratorMessageReactorLive } from "./orchestration/Layers/OrchestratorMessageReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
+import { OrchestratorVerificationReactorLive } from "./orchestration/Layers/OrchestratorVerificationReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/ProjectionPipeline";
 import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery";
@@ -127,10 +129,18 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(WorkspaceEntriesLive),
   );
+  const orchestratorMessageReactorLayer = OrchestratorMessageReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const orchestratorVerificationReactorLayer = OrchestratorVerificationReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
+    Layer.provideMerge(orchestratorMessageReactorLayer),
+    Layer.provideMerge(orchestratorVerificationReactorLayer),
   );
 
   const terminalLayer = TerminalManagerLive.pipe(Layer.provide(makeRuntimePtyAdapterLayer()));
