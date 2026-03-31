@@ -1006,7 +1006,6 @@ export default function Sidebar(props: {
       removeWorktreeMutation,
       routeThreadId,
       threads,
-      toastManager,
       visibleThreads,
     ],
   );

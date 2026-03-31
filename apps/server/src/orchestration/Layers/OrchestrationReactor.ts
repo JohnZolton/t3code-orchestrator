@@ -5,6 +5,7 @@ import {
   type OrchestrationReactorShape,
 } from "../Services/OrchestrationReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { OrchestratorActionReactor } from "../Services/OrchestratorActionReactor.ts";
 import { OrchestratorMessageReactor } from "../Services/OrchestratorMessageReactor.ts";
 import { OrchestratorVerificationReactor } from "../Services/OrchestratorVerificationReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
@@ -14,6 +15,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
   const providerCommandReactor = yield* ProviderCommandReactor;
   const checkpointReactor = yield* CheckpointReactor;
+  const orchestratorActionReactor = yield* OrchestratorActionReactor;
   const orchestratorMessageReactor = yield* OrchestratorMessageReactor;
   const orchestratorVerificationReactor = yield* OrchestratorVerificationReactor;
 
@@ -21,6 +23,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* providerRuntimeIngestion.start();
     yield* providerCommandReactor.start();
     yield* checkpointReactor.start();
+    yield* orchestratorActionReactor.start();
     yield* orchestratorMessageReactor.start();
     yield* orchestratorVerificationReactor.start();
   });
