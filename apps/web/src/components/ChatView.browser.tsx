@@ -12,6 +12,7 @@ import {
   type ServerLifecycleWelcomePayload,
   type ThreadId,
   type TurnId,
+  type UserInputQuestion,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
@@ -31,6 +32,8 @@ import {
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
 import { __resetNativeApiForTests } from "../nativeApi";
+import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
+import { getServerConfig } from "../rpc/serverState";
 import { getRouter } from "../router";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -38,12 +41,19 @@ import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
+vi.mock("../lib/gitStatusState", () => ({
+  useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
+  useGitStatuses: () => new Map(),
+  refreshGitStatus: () => Promise.resolve(null),
+  resetGitStatusStateForTests: () => undefined,
+}));
+
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = "project-1" as ProjectId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
-const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
+const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'></svg>";
 
 interface TestFixture {
   snapshot: OrchestrationReadModel;
@@ -93,9 +103,9 @@ const TEXT_VIEWPORT_MATRIX = [
   { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
 ] as const satisfies readonly ViewportSpec[];
 const ATTACHMENT_VIEWPORT_MATRIX = [
-  DEFAULT_VIEWPORT,
-  { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
+  { ...DEFAULT_VIEWPORT, attachmentTolerancePx: 120 },
+  { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 120 },
+  { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 120 },
 ] as const satisfies readonly ViewportSpec[];
 
 interface UserRowMeasurement {
@@ -224,6 +234,7 @@ function createSnapshotForTargetUser(options: {
             name: `attachment-${attachmentIndex + 1}.png`,
             mimeType: "image/png",
             sizeBytes: 128,
+            previewUrl: `/attachments/attachment-${attachmentIndex + 1}`,
           }))
         : undefined;
 
@@ -397,6 +408,22 @@ async function waitForWsClient(): Promise<void> {
           (request) => request._tag === WS_METHODS.subscribeOrchestrationDomainEvents,
         ),
       ).toBe(true);
+      expect(
+        wsRequests.some((request) => request._tag === WS_METHODS.subscribeServerLifecycle),
+      ).toBe(true);
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.subscribeServerConfig)).toBe(
+        true,
+      );
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+}
+
+async function waitForAppBootstrap(): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(getServerConfig()).not.toBeNull();
+      expect(useStore.getState().bootstrapComplete).toBe(true);
     },
     { timeout: 8_000, interval: 16 },
   );
@@ -515,11 +542,50 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
   };
 }
 
-function createSnapshotWithPendingUserInput(): OrchestrationReadModel {
+function createSnapshotWithPendingUserInput(options?: {
+  questions?: ReadonlyArray<UserInputQuestion>;
+}): OrchestrationReadModel {
   const snapshot = createSnapshotForTargetUser({
     targetMessageId: "msg-user-pending-input-target" as MessageId,
     targetText: "question thread",
   });
+
+  const questions =
+    options?.questions ??
+    ([
+      {
+        id: "scope",
+        header: "Scope",
+        question: "What should this change cover?",
+        options: [
+          {
+            label: "Tight",
+            description: "Touch only the footer layout logic.",
+          },
+          {
+            label: "Broad",
+            description: "Also adjust the related composer controls.",
+          },
+        ],
+        multiSelect: false,
+      },
+      {
+        id: "risk",
+        header: "Risk",
+        question: "How aggressive should the imaginary plan be?",
+        options: [
+          {
+            label: "Conservative",
+            description: "Favor reliability and low-risk changes.",
+          },
+          {
+            label: "Balanced",
+            description: "Mix quick wins with one structural improvement.",
+          },
+        ],
+        multiSelect: false,
+      },
+    ] satisfies ReadonlyArray<UserInputQuestion>);
 
   return {
     ...snapshot,
@@ -535,38 +601,7 @@ function createSnapshotWithPendingUserInput(): OrchestrationReadModel {
                 summary: "User input requested",
                 payload: {
                   requestId: "req-browser-user-input",
-                  questions: [
-                    {
-                      id: "scope",
-                      header: "Scope",
-                      question: "What should this change cover?",
-                      options: [
-                        {
-                          label: "Tight",
-                          description: "Touch only the footer layout logic.",
-                        },
-                        {
-                          label: "Broad",
-                          description: "Also adjust the related composer controls.",
-                        },
-                      ],
-                    },
-                    {
-                      id: "risk",
-                      header: "Risk",
-                      question: "How aggressive should the imaginary plan be?",
-                      options: [
-                        {
-                          label: "Conservative",
-                          description: "Favor reliability and low-risk changes.",
-                        },
-                        {
-                          label: "Balanced",
-                          description: "Mix quick wins with one structural improvement.",
-                        },
-                      ],
-                    },
-                  ],
+                  questions,
                 },
                 turnId: null,
                 sequence: 1,
@@ -649,24 +684,6 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
           worktreePath: null,
         },
       ],
-    };
-  }
-  if (tag === WS_METHODS.gitStatus) {
-    return {
-      isRepo: true,
-      hasOriginRemote: true,
-      isDefaultBranch: true,
-      branch: "main",
-      hasWorkingTreeChanges: false,
-      workingTree: {
-        files: [],
-        insertions: 0,
-        deletions: 0,
-      },
-      hasUpstream: true,
-      aheadCount: 0,
-      behindCount: 0,
-      pr: null,
     };
   }
   if (tag === WS_METHODS.projectsSearchEntries) {
@@ -866,7 +883,7 @@ async function expectComposerActionsContained(): Promise<void> {
 }
 
 async function waitForInteractionModeButton(
-  expectedLabel: "Chat" | "Plan",
+  expectedLabel: "Build" | "Plan",
 ): Promise<HTMLButtonElement> {
   return waitForElement(
     () =>
@@ -1044,10 +1061,17 @@ async function mountChatView(options: {
     }),
   );
 
-  const screen = await render(<RouterProvider router={router} />, {
-    container: host,
-  });
+  const screen = await render(
+    <AppAtomRegistryProvider>
+      <RouterProvider router={router} />
+    </AppAtomRegistryProvider>,
+    {
+      container: host,
+    },
+  );
 
+  await waitForWsClient();
+  await waitForAppBootstrap();
   await waitForLayout();
 
   const cleanup = async () => {
@@ -1138,7 +1162,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         return [];
       },
     });
-    __resetNativeApiForTests();
+    await __resetNativeApiForTests();
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     document.body.innerHTML = "";
@@ -1299,7 +1323,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         snapshot: createSnapshotForTargetUser({
           targetMessageId,
           targetText: userText,
-          targetAttachmentCount: 3,
+          targetAttachmentCount: 2,
         }),
       });
 
@@ -1313,7 +1337,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           {
             role: "user",
             text: userText,
-            attachments: [{ id: "attachment-1" }, { id: "attachment-2" }, { id: "attachment-3" }],
+            attachments: [{ id: "attachment-1" }, { id: "attachment-2" }],
           },
           { timelineWidthPx: timelineWidthMeasuredPx },
         );
@@ -2096,7 +2120,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const initialModeButton = await waitForInteractionModeButton("Chat");
+      const initialModeButton = await waitForInteractionModeButton("Build");
       expect(initialModeButton.title).toContain("enter plan mode");
 
       window.dispatchEvent(
@@ -2109,7 +2133,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       await waitForLayout();
 
-      expect((await waitForInteractionModeButton("Chat")).title).toContain("enter plan mode");
+      expect((await waitForInteractionModeButton("Build")).title).toContain("enter plan mode");
 
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
@@ -2125,7 +2149,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         async () => {
           expect((await waitForInteractionModeButton("Plan")).title).toContain(
-            "return to normal chat mode",
+            "return to normal build mode",
           );
         },
         { timeout: 8_000, interval: 16 },
@@ -2142,7 +2166,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         async () => {
-          expect((await waitForInteractionModeButton("Chat")).title).toContain("enter plan mode");
+          expect((await waitForInteractionModeButton("Build")).title).toContain("enter plan mode");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -2818,6 +2842,55 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses the active worktree path when saving a proposed plan to the workspace", async () => {
+    const snapshot = createSnapshotWithLongProposedPlan();
+    const threads = snapshot.threads.slice();
+    const targetThreadIndex = threads.findIndex((thread) => thread.id === THREAD_ID);
+    const targetThread = targetThreadIndex >= 0 ? threads[targetThreadIndex] : undefined;
+    if (targetThread) {
+      threads[targetThreadIndex] = {
+        ...targetThread,
+        worktreePath: "/repo/worktrees/plan-thread",
+      };
+    }
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        threads,
+      },
+    });
+
+    try {
+      const planActionsButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Plan actions"]'),
+        "Unable to find proposed plan actions button.",
+      );
+      planActionsButton.click();
+
+      const saveToWorkspaceItem = await waitForElement(
+        () =>
+          (Array.from(document.querySelectorAll('[data-slot="menu-item"]')).find(
+            (item) => item.textContent?.trim() === "Save to workspace",
+          ) ?? null) as HTMLElement | null,
+        'Unable to find "Save to workspace" menu item.',
+      );
+      saveToWorkspaceItem.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(
+            "Enter a path relative to /repo/worktrees/plan-thread.",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps pending-question footer actions inside the composer after a real resize", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
@@ -2833,6 +2906,143 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await mounted.setContainerSize(COMPACT_FOOTER_VIEWPORT);
       await expectComposerActionsContained();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not trigger numeric option shortcuts while the composer is focused", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithPendingUserInput(),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+
+      const event = new KeyboardEvent("keydown", {
+        key: "2",
+        bubbles: true,
+        cancelable: true,
+      });
+      composerEditor.dispatchEvent(event);
+      await waitForLayout();
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.body.textContent).toContain("What should this change cover?");
+      expect(document.body.textContent).not.toContain(
+        "How aggressive should the imaginary plan be?",
+      );
+      await waitForButtonByText("Next question");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("submits multi-select questionnaire answers as arrays", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithPendingUserInput({
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which areas should this change cover?",
+            options: [
+              {
+                label: "Server",
+                description: "Touch server orchestration.",
+              },
+              {
+                label: "Web",
+                description: "Touch the browser UI.",
+              },
+            ],
+            multiSelect: true,
+          },
+          {
+            id: "risk",
+            header: "Risk",
+            question: "How aggressive should the imaginary plan be?",
+            options: [
+              {
+                label: "Balanced",
+                description: "Mix quick wins with one structural improvement.",
+              },
+            ],
+            multiSelect: false,
+          },
+        ],
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const serverOption = await waitForButtonContainingText("Server");
+      serverOption.click();
+      await waitForLayout();
+
+      expect(document.body.textContent).toContain("Which areas should this change cover?");
+
+      const webOption = await waitForButtonContainingText("Web");
+      webOption.click();
+      await waitForLayout();
+
+      expect(document.body.textContent).toContain("Which areas should this change cover?");
+
+      const nextButton = await waitForButtonByText("Next question");
+      expect(nextButton.disabled).toBe(false);
+      nextButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(
+            "How aggressive should the imaginary plan be?",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const balancedOption = await waitForButtonContainingText("Balanced");
+      balancedOption.click();
+
+      const submitButton = await waitForButtonByText("Submit answers");
+      expect(submitButton.disabled).toBe(false);
+      submitButton.click();
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.user-input.respond",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                answers?: Record<string, unknown>;
+              }
+            | undefined;
+
+          expect(dispatchRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "thread.user-input.respond",
+            answers: {
+              scope: ["Server", "Web"],
+              risk: "Balanced",
+            },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }
