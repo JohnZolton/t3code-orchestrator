@@ -77,32 +77,23 @@ const makeNip17Gateway = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   // ── Persistent dedup: track processed event IDs in SQLite ──────
-  const loadSeenIds = () =>
-    Effect.tryPromise({
-      try: async () => {
-        const rows = await Effect.runPromise(
-          sql`SELECT value FROM nostr_gateway_state WHERE key = 'seen_event_ids'`,
-        );
-        if (rows.length > 0 && rows[0]!.value) {
-          try { return new Set(JSON.parse(rows[0]!.value as string) as string[]); } catch {}
-        }
-        return new Set<string>();
-      },
-      catch: () => new Set<string>(),
-    }).pipe(Effect.catch(() => Effect.succeed(new Set<string>())));
+  // Seen ID persistence — uses Effect composition (proper SqlClient context)
+  const loadSeenIdsEffect = Effect.gen(function* () {
+    const rows = yield* sql`SELECT value FROM nostr_gateway_state WHERE key = 'seen_event_ids'`;
+    const arr = rows as any[];
+    if (arr.length > 0 && arr[0]?.value) {
+      try { return new Set(JSON.parse(arr[0].value) as string[]); } catch {}
+    }
+    return new Set<string>();
+  }).pipe(Effect.catch(() => Effect.succeed(new Set<string>())));
 
-  const persistSeenIds = (ids: Set<string>) =>
-    Effect.tryPromise({
-      try: () => {
-        // Keep last 5000 IDs to prevent unbounded growth
-        const arr = [...ids];
-        const trimmed = arr.length > 5000 ? arr.slice(arr.length - 5000) : arr;
-        return Effect.runPromise(
-          sql`INSERT INTO nostr_gateway_state (key, value) VALUES ('seen_event_ids', ${JSON.stringify(trimmed)})
-              ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-        );
-      },
-      catch: () => void 0,
+  const makePersistSeenIdsEffect = (ids: Set<string>) =>
+    Effect.gen(function* () {
+      const arr = [...ids];
+      const trimmed = arr.length > 5000 ? arr.slice(arr.length - 5000) : arr;
+      const json = JSON.stringify(trimmed);
+      yield* sql`INSERT INTO nostr_gateway_state (key, value) VALUES ('seen_event_ids', ${json})
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value`;
     }).pipe(Effect.catch(() => Effect.void));
 
   const statusRef = yield* Ref.make<NostrDmStatus>({
@@ -189,7 +180,7 @@ const makeNip17Gateway = Effect.gen(function* () {
       }
 
       // Load persisted seen event IDs to skip already-processed messages
-      const persistedSeenIds = yield* loadSeenIds();
+      const persistedSeenIds = yield* loadSeenIdsEffect;
       yield* Effect.log(`NIP-17 gateway: ${persistedSeenIds.size} previously seen event ID(s).`);
 
       // Shared state for subscriptions
@@ -258,8 +249,8 @@ const makeNip17Gateway = Effect.gen(function* () {
         seen.add(eventId);
         persistedSeenIds.add(eventId);
 
-        // Persist seen IDs every time (debounced by Effect.runFork)
-        Effect.runFork(persistSeenIds(persistedSeenIds));
+        // Persist seen IDs (fire-and-forget)
+        Effect.runFork(makePersistSeenIdsEffect(persistedSeenIds));
 
         const pTags = (event.tags ?? []).filter((t: string[]) => t[0] === "p").map((t: string[]) => t[1]);
         let targetThreadId: string | null = null;
