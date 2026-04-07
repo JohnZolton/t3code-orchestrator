@@ -352,33 +352,34 @@ const makeNip17Gateway = Effect.gen(function* () {
                 yield* Effect.log(`!new: created thread ${newThreadId.slice(0, 8)}... npub=${keypair.npub.slice(0, 20)}...`);
 
                 // Publish inbox relays for the new thread
-                try {
-                  const secBytes = hexToBytes(keypair.seckeyHex);
-                  const relayTags = DEFAULT_RELAYS.map((r) => ["relay", r]);
-                  const inboxEvent = finalizeEvent({
-                    kind: 10050,
-                    created_at: Math.floor(Date.now() / 1000),
-                    tags: relayTags,
-                    content: "",
-                  }, secBytes);
-                  await Promise.allSettled(
-                    pool.publish(DEFAULT_RELAYS, inboxEvent as any).map((p: Promise<any>) =>
-                      Promise.race([p, new Promise((r) => setTimeout(r, 5000))]),
-                    ),
-                  );
-                } catch {}
+                yield* Effect.tryPromise({
+                  try: async () => {
+                    const secBytes = hexToBytes(keypair.seckeyHex);
+                    const relayTags = DEFAULT_RELAYS.map((r) => ["relay", r]);
+                    const inboxEvent = finalizeEvent({
+                      kind: 10050,
+                      created_at: Math.floor(Date.now() / 1000),
+                      tags: relayTags,
+                      content: "",
+                    }, secBytes);
+                    await Promise.allSettled(
+                      pool.publish(DEFAULT_RELAYS, inboxEvent as any).map((p: Promise<any>) =>
+                        Promise.race([p, new Promise((r) => setTimeout(r, 5000))]),
+                      ),
+                    );
+                  },
+                  catch: () => void 0,
+                }).pipe(Effect.catch(() => Effect.void));
 
                 // Wait a moment for relay propagation
                 yield* Effect.sleep("2 seconds");
 
                 // DM the user FROM the new thread's npub
-                try {
-                  const greeting = `New thread: ${prompt}`;
-                  sendReply(keypair.seckeyHex, senderPubkey, greeting);
-                  yield* Effect.log(`!new: sent initial DM from new thread to ${senderPubkey.slice(0, 12)}...`);
-                } catch (e) {
-                  yield* Effect.logWarning(`!new: failed to send initial DM`);
-                }
+                yield* Effect.tryPromise({
+                  try: () => sendReply(keypair.seckeyHex, senderPubkey, `New thread: ${prompt}`),
+                  catch: () => void 0,
+                }).pipe(Effect.catch(() => Effect.void));
+                yield* Effect.log(`!new: sent initial DM from new thread to ${senderPubkey.slice(0, 12)}...`);
 
                 // Start the turn on the new thread
                 yield* orchestrationEngine.dispatch({

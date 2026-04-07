@@ -990,17 +990,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         // Publish inbox relays (kind 10050) so DM clients can find this thread
         yield* Effect.tryPromise({
           try: async () => {
-            const { SimplePool } = await import("nostr-tools/pool");
-            const { finalizeEvent } = await import("nostr-tools/pure");
-            const { hexToBytes } = await import("nostr-tools/utils");
-            const pool = new SimplePool();
-            const secBytes = hexToBytes(keypair.seckeyHex);
+            const nostrPool = await import("nostr-tools/pool");
+            const nostrPure = await import("nostr-tools/pure");
+            const nostrUtils = await import("nostr-tools/utils");
+            const pool = new nostrPool.SimplePool();
+            const secBytes = nostrUtils.hexToBytes(keypair.seckeyHex);
             const relayTags = [
               "wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band",
               "wss://relay.primal.net", "wss://relay.0xchat.com", "wss://inbox.nostr.wine",
               "wss://auth.nostr1.com",
             ].map((r) => ["relay", r]);
-            const event = finalizeEvent({
+            const event = nostrPure.finalizeEvent({
               kind: 10050,
               created_at: Math.floor(Date.now() / 1000),
               tags: relayTags,
