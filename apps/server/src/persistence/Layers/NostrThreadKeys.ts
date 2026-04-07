@@ -17,7 +17,8 @@ import {
 const decodeRow = Schema.decodeUnknownEffect(NostrDmThreadKeyRow);
 
 const GetByThreadIdRequest = Schema.Struct({ threadId: TrimmedNonEmptyString });
-const GetByPubkeyRequest = Schema.Struct({ pubkeyHex: TrimmedNonEmptyString });
+const GetByPubkeyRequest = Schema.Struct({ pubkeyHex: TrimmedNonEmptyString
+});
 
 function toPersistenceSqlOrDecodeError(sqlOp: string, decodeOp: string) {
   return (cause: unknown): ProjectionRepositoryError =>
@@ -50,7 +51,7 @@ const makeNostrDmThreadKeysRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           seckey_hex AS "seckeyHex",
           pubkey_hex AS "pubkeyHex",
-          created_at AS "createdAt"
+          created_at AS "createdAt",
         FROM nostr_thread_keys
         WHERE thread_id = ${threadId}
       `,
@@ -65,7 +66,7 @@ const makeNostrDmThreadKeysRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           seckey_hex AS "seckeyHex",
           pubkey_hex AS "pubkeyHex",
-          created_at AS "createdAt"
+          created_at AS "createdAt",
         FROM nostr_thread_keys
         WHERE pubkey_hex = ${pubkeyHex}
       `,
@@ -80,7 +81,7 @@ const makeNostrDmThreadKeysRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           seckey_hex AS "seckeyHex",
           pubkey_hex AS "pubkeyHex",
-          created_at AS "createdAt"
+          created_at AS "createdAt",
         FROM nostr_thread_keys
         ORDER BY created_at DESC
       `,
@@ -162,7 +163,13 @@ const makeNostrDmThreadKeysRepository = Effect.gen(function* () {
       ),
     );
 
-  return { upsert, getByThreadId, getByPubkey, list } satisfies NostrDmThreadKeysRepositoryShape;
+  return {
+    upsert,
+    getByThreadId,
+    getByPubkey,
+    list,
+    updateSender,
+  } satisfies NostrDmThreadKeysRepositoryShape;
 });
 
 export const NostrDmThreadKeysRepositoryLive = Layer.effect(
