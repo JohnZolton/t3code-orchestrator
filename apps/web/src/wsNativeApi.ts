@@ -218,6 +218,12 @@ export function createWsNativeApi(): NativeApi {
     nostrDm: {
       getThreadNpub: (input: { threadId: string }) =>
         transport.request(WS_METHODS.nostrDmGetThreadNpub, input),
+      addAllowedPubkey: (input: { pubkey: string; label?: string }) =>
+        transport.request(WS_METHODS.nostrDmAddAllowedPubkey, input),
+      removeAllowedPubkey: (input: { pubkeyHex: string }) =>
+        transport.request(WS_METHODS.nostrDmRemoveAllowedPubkey, input),
+      listAllowedPubkeys: (input: Record<string, never>) =>
+        transport.request(WS_METHODS.nostrDmListAllowedPubkeys, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
