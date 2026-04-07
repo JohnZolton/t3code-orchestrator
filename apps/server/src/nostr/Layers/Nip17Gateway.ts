@@ -23,6 +23,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { NostrDmThreadKeysRepository } from "../../persistence/Services/NostrThreadKeys.ts";
 import type { NostrDmThreadKeyRow } from "../../persistence/Services/NostrThreadKeys.ts";
 import { NostrAllowedPubkeysRepository } from "../../persistence/Services/NostrAllowedPubkeys.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { NostrDmGateway, type NostrDmGatewayShape } from "../Services/NostrDmGateway.ts";
 import { generateThreadKeypair } from "../generateKeypair.ts";
@@ -68,11 +69,37 @@ function resolveOwnerPubkey(): string | null {
   return raw;
 }
 
+const GATEWAY_STATE_KEY_LAST_SEEN = "last_seen_timestamp";
+
 const makeNip17Gateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const settingsService = yield* ServerSettingsService;
   const threadKeysRepo = yield* NostrDmThreadKeysRepository;
   const allowedPubkeysRepo = yield* NostrAllowedPubkeysRepository;
+  const sql = yield* SqlClient.SqlClient;
+
+  // ── Gateway state persistence helpers ─────────────────────────
+  const getLastSeenTimestamp = () =>
+    Effect.tryPromise({
+      try: async () => {
+        const rows = await Effect.runPromise(
+          sql`SELECT value FROM nostr_gateway_state WHERE key = ${GATEWAY_STATE_KEY_LAST_SEEN}`,
+        );
+        if (rows.length > 0 && rows[0]!.value) return parseInt(rows[0]!.value as string, 10);
+        return 0;
+      },
+      catch: () => 0 as number,
+    }).pipe(Effect.catch(() => Effect.succeed(0)));
+
+  const setLastSeenTimestamp = (ts: number) =>
+    Effect.tryPromise({
+      try: () =>
+        Effect.runPromise(
+          sql`INSERT INTO nostr_gateway_state (key, value) VALUES (${GATEWAY_STATE_KEY_LAST_SEEN}, ${String(ts)})
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+        ),
+      catch: () => void 0,
+    }).pipe(Effect.catch(() => Effect.void));
 
   const statusRef = yield* Ref.make<NostrDmStatus>({
     status: "disabled",
@@ -157,6 +184,11 @@ const makeNip17Gateway = Effect.gen(function* () {
         try { pool.ensureRelay(relay); } catch {}
       }
 
+      // Load last-seen timestamp to skip already-processed messages
+      const lastSeenTs = yield* getLastSeenTimestamp();
+      let currentMaxTs = lastSeenTs;
+      yield* Effect.log(`NIP-17 gateway: last seen timestamp=${lastSeenTs} (${lastSeenTs ? new Date(lastSeenTs * 1000).toISOString() : "never"})`);
+
       // Shared state for subscriptions
       const pubkeyToThreadId = new Map(keys.map((k) => [k.pubkeyHex, k.threadId]));
       const threadIdToSeckey = new Map(keys.map((k) => [k.threadId, k.seckeyHex]));
@@ -218,6 +250,16 @@ const makeNip17Gateway = Effect.gen(function* () {
         if (seen.has(event.id)) return;
         seen.add(event.id);
         if (seen.size > 50_000) { const e = [...seen]; for (let i = 0; i < 25_000; i++) seen.delete(e[i]!); }
+
+        // Skip events we've already processed (survives restarts)
+        const eventTs: number = event.created_at ?? 0;
+        if (eventTs > 0 && eventTs <= lastSeenTs) return;
+
+        // Update high-water mark and persist periodically
+        if (eventTs > currentMaxTs) {
+          currentMaxTs = eventTs;
+          Effect.runFork(setLastSeenTimestamp(eventTs));
+        }
 
         const pTags = (event.tags ?? []).filter((t: string[]) => t[0] === "p").map((t: string[]) => t[1]);
         let targetThreadId: string | null = null;
@@ -417,9 +459,11 @@ const makeNip17Gateway = Effect.gen(function* () {
         } catch {}
       }
 
-      // ── Start initial subscription ──────────────────────────────
+      // ── Start initial subscription (only fetch events newer than last seen)
       const allPubkeys = [...knownPubkeys];
-      pool.subscribeMany(DEFAULT_RELAYS, { kinds: [1059], "#p": allPubkeys } as any, {
+      const subFilter: any = { kinds: [1059], "#p": allPubkeys };
+      if (lastSeenTs > 0) subFilter.since = lastSeenTs;
+      pool.subscribeMany(DEFAULT_RELAYS, subFilter, {
         onevent: handleGiftWrap,
         oneose: () => {},
       });

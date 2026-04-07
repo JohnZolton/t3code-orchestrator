@@ -33,6 +33,7 @@ import Migration0017 from "./Migrations/017_ProjectionThreadsArchivedAt.ts";
 import Migration0018 from "./Migrations/018_ProjectionThreadsArchivedAtIndex.ts";
 import Migration0019 from "./Migrations/019_NostrThreadKeys.ts";
 import Migration0020 from "./Migrations/020_NostrAllowedPubkeys.ts";
+import Migration0021 from "./Migrations/021_NostrGatewayState.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -65,6 +66,7 @@ export const migrationEntries = [
   [18, "ProjectionThreadsArchivedAtIndex", Migration0018],
   [19, "NostrThreadKeys", Migration0019],
   [20, "NostrAllowedPubkeys", Migration0020],
+  [21, "NostrGatewayState", Migration0021],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
