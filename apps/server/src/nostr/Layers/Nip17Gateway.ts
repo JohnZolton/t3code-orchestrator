@@ -52,6 +52,7 @@ const DEFAULT_RELAYS = [
 
 const MAX_DM_LENGTH = 4000;
 const KEY_POLL_INTERVAL_MS = 10_000;
+const RECONNECT_INTERVAL_MS = 60_000; // Re-establish relay connections every 60s
 
 /** Resolve owner pubkey from env (npub1 or hex). */
 function resolveOwnerPubkey(): string | null {
@@ -173,11 +174,6 @@ const makeNip17Gateway = Effect.gen(function* () {
       }
 
       yield* Effect.log(`NIP-17 gateway: ${allowedSet.size} allowed pubkey(s).`);
-
-      const pool = new SimplePool();
-      for (const relay of DEFAULT_RELAYS) {
-        try { pool.ensureRelay(relay); } catch {}
-      }
 
       // Load persisted seen event IDs to skip already-processed messages
       const persistedSeenIds = yield* loadSeenIdsEffect;
@@ -450,12 +446,22 @@ const makeNip17Gateway = Effect.gen(function* () {
         } catch {}
       }
 
-      // ── Start initial subscription ──────────────────────────────
-      const allPubkeys = [...knownPubkeys];
-      pool.subscribeMany(DEFAULT_RELAYS, { kinds: [1059], "#p": allPubkeys } as any, {
-        onevent: handleGiftWrap,
-        oneose: () => {},
-      });
+      // ── Pool management with reconnection for sleep/wake recovery ─
+      let pool = new SimplePool();
+      const connectPool = () => {
+        for (const r of DEFAULT_RELAYS) { try { pool.ensureRelay(r); } catch {} }
+      };
+      const subscribeAllPubkeys = () => {
+        const pks = [...knownPubkeys];
+        if (pks.length > 0) {
+          pool.subscribeMany(DEFAULT_RELAYS, { kinds: [1059], "#p": pks } as any, {
+            onevent: handleGiftWrap, oneose: () => {},
+          });
+        }
+      };
+
+      connectPool();
+      subscribeAllPubkeys();
 
       yield* updateStatus({ status: "listening", activeMappings: knownPubkeys.size });
       yield* Effect.log("NIP-17 DM gateway started.");
@@ -498,9 +504,15 @@ const makeNip17Gateway = Effect.gen(function* () {
         ),
       );
 
-      // ── Poll for new keys, hot-add subscriptions ────────────────
+      // ── Poll loop: new keys + periodic reconnection ────────────────
+      let ticksSinceReconnect = 0;
+      const reconnectEveryNTicks = Math.ceil(RECONNECT_INTERVAL_MS / KEY_POLL_INTERVAL_MS);
+
       while (true) {
         yield* Effect.sleep(`${KEY_POLL_INTERVAL_MS} millis`);
+        ticksSinceReconnect++;
+
+        // Check for new thread keys
         const allKeys = yield* threadKeysRepo.list().pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<NostrDmThreadKeyRow>)));
         const newKeys = allKeys.filter((k) => !knownPubkeys.has(k.pubkeyHex));
         if (newKeys.length > 0) {
@@ -510,11 +522,18 @@ const makeNip17Gateway = Effect.gen(function* () {
             pubkeyToThreadId.set(key.pubkeyHex, key.threadId);
             threadIdToSeckey.set(key.threadId, key.seckeyHex);
           }
-          pool.subscribeMany(DEFAULT_RELAYS, { kinds: [1059], "#p": newKeys.map((k) => k.pubkeyHex) } as any, {
-            onevent: handleGiftWrap,
-            oneose: () => {},
-          });
           yield* updateStatus({ activeMappings: knownPubkeys.size });
+          // Force reconnect to pick up new keys
+          ticksSinceReconnect = reconnectEveryNTicks;
+        }
+
+        // Periodic reconnect: close pool, recreate, resubscribe all pubkeys
+        if (ticksSinceReconnect >= reconnectEveryNTicks) {
+          ticksSinceReconnect = 0;
+          try { pool.close(DEFAULT_RELAYS); } catch {}
+          pool = new SimplePool();
+          connectPool();
+          subscribeAllPubkeys();
         }
       }
     }).pipe(Effect.forkScoped);
