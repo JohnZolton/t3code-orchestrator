@@ -12,6 +12,7 @@ import {
 } from "../providerSnapshot.ts";
 import { OpenCodeProvider } from "../Services/OpenCodeProvider.ts";
 import {
+  DEFAULT_OPENCODE_MODEL_CAPABILITIES,
   createOpenCodeSdkClient,
   flattenOpenCodeModels,
   loadOpenCodeInventory,
@@ -34,7 +35,12 @@ function checkOpenCodeProviderStatus(input: {
       provider: PROVIDER,
       enabled: input.settings.enabled,
       checkedAt,
-      models: providerModelsFromSettings([], PROVIDER, customModels),
+      models: providerModelsFromSettings(
+        [],
+        PROVIDER,
+        customModels,
+        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+      ),
       probe: {
         installed,
         version,
@@ -69,7 +75,12 @@ function checkOpenCodeProviderStatus(input: {
         provider: PROVIDER,
         enabled: false,
         checkedAt,
-        models: providerModelsFromSettings([], PROVIDER, customModels),
+        models: providerModelsFromSettings(
+          [],
+          PROVIDER,
+          customModels,
+          DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+        ),
         probe: {
           installed: true,
           version,
@@ -101,6 +112,7 @@ function checkOpenCodeProviderStatus(input: {
       flattenOpenCodeModels(inventoryExit.value),
       PROVIDER,
       customModels,
+      DEFAULT_OPENCODE_MODEL_CAPABILITIES,
     );
     const connectedCount = inventoryExit.value.providerList.connected.length;
     return buildServerProvider({

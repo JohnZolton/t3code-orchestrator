@@ -28,7 +28,7 @@ const OPENAI_VARIANTS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const ANTHROPIC_VARIANTS = ["high", "max"];
 const GOOGLE_VARIANTS = ["low", "high"];
 
-const EMPTY_CAPABILITIES: ModelCapabilities = {
+export const DEFAULT_OPENCODE_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
   supportsFastMode: false,
   supportsThinkingToggle: false,
@@ -157,7 +157,7 @@ function openCodeCapabilitiesForModel(input: {
   const variantOptions = buildVariantOptions(input.providerID, input.model);
   const agentOptions = buildAgentOptions(input.agents);
   return {
-    ...EMPTY_CAPABILITIES,
+    ...DEFAULT_OPENCODE_MODEL_CAPABILITIES,
     ...(variantOptions.length > 0 ? { variantOptions } : {}),
     ...(agentOptions.length > 0 ? { agentOptions } : {}),
   };
