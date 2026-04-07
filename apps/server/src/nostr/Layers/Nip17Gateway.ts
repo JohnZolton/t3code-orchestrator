@@ -294,29 +294,37 @@ const makeNip17Gateway = Effect.gen(function* () {
               Effect.gen(function* () {
                 yield* Effect.log(`NIP-17 command: !new "${prompt.slice(0, 50)}"`);
 
-                // Get the project from the read model
+                // Copy config from the source thread (the one !new was sent to)
                 const readModel = yield* orchestrationEngine.getReadModel();
-                const project = readModel.projects.find((p: any) => p.deletedAt === null);
+                const sourceThread = readModel.threads.find((t: any) => t.id === threadId);
+                const project = readModel.projects.find((p: any) =>
+                  sourceThread ? p.id === sourceThread.projectId : p.deletedAt === null,
+                );
                 if (!project) {
                   yield* Effect.logWarning("!new: no project available");
                   return;
                 }
 
+                // Use source thread's model selection, fall back to project default
+                const modelSelection = sourceThread?.modelSelection
+                  ?? project.defaultModelSelection
+                  ?? { provider: "claudeAgent" as const, model: "claude-opus-4-6" };
+
                 const newThreadId = crypto.randomUUID();
                 const now = new Date().toISOString();
 
-                // Create the thread
+                // Create the thread with same config as the source
                 yield* orchestrationEngine.dispatch({
                   type: "thread.create",
                   commandId: serverCommandId("nip17-new-thread"),
                   threadId: newThreadId as ThreadId,
                   projectId: project.id,
                   title: prompt.slice(0, 80),
-                  modelSelection: project.defaultModelSelection ?? { provider: "codex" as const, model: "gpt-5-codex" },
-                  runtimeMode: "full-access",
-                  interactionMode: "default",
-                  branch: null,
-                  worktreePath: null,
+                  modelSelection,
+                  runtimeMode: sourceThread?.runtimeMode ?? "full-access",
+                  interactionMode: sourceThread?.interactionMode ?? "default",
+                  branch: sourceThread?.branch ?? null,
+                  worktreePath: sourceThread?.worktreePath ?? null,
                   createdAt: now,
                 } as any);
 
