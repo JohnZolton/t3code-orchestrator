@@ -243,15 +243,57 @@ const makeNip17Gateway = Effect.gen(function* () {
 
           // Track sender for outbound replies
           const threadId = targetThreadId;
+          const messageText: string = rumor.content.trim();
           threadLastSender.set(threadId, rumor.pubkey);
+
+          // ── Command parsing: !kill, !stop, !status ──────────────
+          const cmd = messageText.toLowerCase();
+          if (cmd === "!kill" || cmd === "!stop" || cmd === "!interrupt") {
+            Effect.runFork(
+              Effect.gen(function* () {
+                yield* Effect.log(`NIP-17 command: ${cmd} on thread ${threadId.slice(0, 8)}...`);
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.turn.interrupt",
+                  commandId: serverCommandId("nip17-interrupt"),
+                  threadId: threadId as ThreadId,
+                  createdAt: new Date().toISOString(),
+                } as any);
+              }).pipe(Effect.catch(() => Effect.void)),
+            );
+            return;
+          }
+
+          if (cmd === "!restart" || cmd === "!reset") {
+            Effect.runFork(
+              Effect.gen(function* () {
+                yield* Effect.log(`NIP-17 command: ${cmd} on thread ${threadId.slice(0, 8)}...`);
+                // Interrupt current turn first, then stop session
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.turn.interrupt",
+                  commandId: serverCommandId("nip17-interrupt"),
+                  threadId: threadId as ThreadId,
+                  createdAt: new Date().toISOString(),
+                } as any).pipe(Effect.catch(() => Effect.void));
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.session.stop",
+                  commandId: serverCommandId("nip17-session-stop"),
+                  threadId: threadId as ThreadId,
+                  createdAt: new Date().toISOString(),
+                } as any).pipe(Effect.catch(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void)),
+            );
+            return;
+          }
+
+          // ── Normal message: dispatch as a turn ──────────────────
           Effect.runFork(
             Effect.gen(function* () {
-              yield* Effect.log(`NIP-17 DM on thread ${threadId.slice(0, 8)}...: "${rumor.content.slice(0, 50)}"`);
+              yield* Effect.log(`NIP-17 DM on thread ${threadId.slice(0, 8)}...: "${messageText.slice(0, 50)}"`);
               yield* orchestrationEngine.dispatch({
                 type: "thread.turn.start",
                 commandId: serverCommandId("nip17-turn"),
                 threadId: threadId as ThreadId,
-                message: { messageId: serverMessageId(), role: "user" as const, text: rumor.content, attachments: [] },
+                message: { messageId: serverMessageId(), role: "user" as const, text: messageText, attachments: [] },
                 runtimeMode: "full-access",
                 interactionMode: "default",
                 createdAt: new Date().toISOString(),
