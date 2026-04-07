@@ -34,6 +34,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Path,
   Ref,
   Result,
@@ -56,7 +57,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { NostrDmGateway } from "./nostr/Services/NostrDmGateway.ts";
 import { NostrDmThreadKeysRepository } from "./persistence/Services/NostrThreadKeys.ts";
-import { generateThreadKeypair } from "./nostr/generateKeypair.ts";
+import { generateThreadKeypair, npubFromHex } from "./nostr/generateKeypair.ts";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
@@ -966,10 +967,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         }).pipe(Effect.catch(() => Effect.succeed(Option.none())));
 
         if (Option.isSome(existing)) {
-          const { npubEncode } = await import("nostr-tools/nip19");
           return {
             threadId: existing.value.threadId,
-            npub: npubEncode(existing.value.pubkeyHex),
+            npub: npubFromHex(existing.value.pubkeyHex),
             pubkeyHex: existing.value.pubkeyHex,
           };
         }

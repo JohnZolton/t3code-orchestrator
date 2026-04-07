@@ -16,6 +16,11 @@ export interface ThreadKeypair {
   readonly npub: string;
 }
 
+/** Convert a hex pubkey to npub bech32 format. */
+export function npubFromHex(pubkeyHex: string): string {
+  return npubEncode(pubkeyHex);
+}
+
 export function generateThreadKeypair(): ThreadKeypair {
   const secBytes = generateSecretKey();
   const seckeyHex = bytesToHex(secBytes);

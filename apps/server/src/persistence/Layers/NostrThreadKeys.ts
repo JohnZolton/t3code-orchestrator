@@ -10,8 +10,8 @@ import {
 } from "../Errors.ts";
 import {
   NostrDmThreadKeyRow,
-  NostrThreadKeysRepository,
-  type NostrThreadKeysRepositoryShape,
+  NostrDmThreadKeysRepository,
+  type NostrDmThreadKeysRepositoryShape,
 } from "../Services/NostrThreadKeys.ts";
 
 const decodeRow = Schema.decodeUnknownEffect(NostrDmThreadKeyRow);
@@ -26,7 +26,7 @@ function toPersistenceSqlOrDecodeError(sqlOp: string, decodeOp: string) {
       : toPersistenceSqlError(sqlOp)(cause);
 }
 
-const makeNostrThreadKeysRepository = Effect.gen(function* () {
+const makeNostrDmThreadKeysRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const upsertRow = SqlSchema.void({
@@ -86,22 +86,22 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
       `,
   });
 
-  const upsert: NostrThreadKeysRepositoryShape["upsert"] = (row) =>
+  const upsert: NostrDmThreadKeysRepositoryShape["upsert"] = (row) =>
     upsertRow(row).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
-          "NostrThreadKeysRepository.upsert:query",
-          "NostrThreadKeysRepository.upsert:encodeRequest",
+          "NostrDmThreadKeysRepository.upsert:query",
+          "NostrDmThreadKeysRepository.upsert:encodeRequest",
         ),
       ),
     );
 
-  const getByThreadId: NostrThreadKeysRepositoryShape["getByThreadId"] = (input) =>
+  const getByThreadId: NostrDmThreadKeysRepositoryShape["getByThreadId"] = (input) =>
     getRowByThreadId(input).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
-          "NostrThreadKeysRepository.getByThreadId:query",
-          "NostrThreadKeysRepository.getByThreadId:decodeRow",
+          "NostrDmThreadKeysRepository.getByThreadId:query",
+          "NostrDmThreadKeysRepository.getByThreadId:decodeRow",
         ),
       ),
       Effect.flatMap((opt) =>
@@ -110,7 +110,7 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
           onSome: (row) =>
             decodeRow(row).pipe(
               Effect.mapError(
-                toPersistenceDecodeError("NostrThreadKeysRepository.getByThreadId:rowToKey"),
+                toPersistenceDecodeError("NostrDmThreadKeysRepository.getByThreadId:rowToKey"),
               ),
               Effect.map(Option.some),
             ),
@@ -118,12 +118,12 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
       ),
     );
 
-  const getByPubkey: NostrThreadKeysRepositoryShape["getByPubkey"] = (input) =>
+  const getByPubkey: NostrDmThreadKeysRepositoryShape["getByPubkey"] = (input) =>
     getRowByPubkey(input).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
-          "NostrThreadKeysRepository.getByPubkey:query",
-          "NostrThreadKeysRepository.getByPubkey:decodeRow",
+          "NostrDmThreadKeysRepository.getByPubkey:query",
+          "NostrDmThreadKeysRepository.getByPubkey:decodeRow",
         ),
       ),
       Effect.flatMap((opt) =>
@@ -132,7 +132,7 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
           onSome: (row) =>
             decodeRow(row).pipe(
               Effect.mapError(
-                toPersistenceDecodeError("NostrThreadKeysRepository.getByPubkey:rowToKey"),
+                toPersistenceDecodeError("NostrDmThreadKeysRepository.getByPubkey:rowToKey"),
               ),
               Effect.map(Option.some),
             ),
@@ -140,12 +140,12 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
       ),
     );
 
-  const list: NostrThreadKeysRepositoryShape["list"] = () =>
+  const list: NostrDmThreadKeysRepositoryShape["list"] = () =>
     listRows(undefined).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
-          "NostrThreadKeysRepository.list:query",
-          "NostrThreadKeysRepository.list:decodeRows",
+          "NostrDmThreadKeysRepository.list:query",
+          "NostrDmThreadKeysRepository.list:decodeRows",
         ),
       ),
       Effect.flatMap((rows) =>
@@ -154,7 +154,7 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
           (row) =>
             decodeRow(row).pipe(
               Effect.mapError(
-                toPersistenceDecodeError("NostrThreadKeysRepository.list:rowToKey"),
+                toPersistenceDecodeError("NostrDmThreadKeysRepository.list:rowToKey"),
               ),
             ),
           { concurrency: "unbounded" },
@@ -162,10 +162,10 @@ const makeNostrThreadKeysRepository = Effect.gen(function* () {
       ),
     );
 
-  return { upsert, getByThreadId, getByPubkey, list } satisfies NostrThreadKeysRepositoryShape;
+  return { upsert, getByThreadId, getByPubkey, list } satisfies NostrDmThreadKeysRepositoryShape;
 });
 
-export const NostrThreadKeysRepositoryLive = Layer.effect(
-  NostrThreadKeysRepository,
-  makeNostrThreadKeysRepository,
+export const NostrDmThreadKeysRepositoryLive = Layer.effect(
+  NostrDmThreadKeysRepository,
+  makeNostrDmThreadKeysRepository,
 );
