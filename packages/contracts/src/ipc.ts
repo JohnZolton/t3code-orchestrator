@@ -52,6 +52,7 @@ import type {
 } from "./orchestration";
 import { EditorId } from "./editor";
 import { ServerSettings, ServerSettingsPatch } from "./settings";
+import type { ThreadNpubInfo } from "./nostr";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -186,5 +187,8 @@ export interface NativeApi {
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
+  };
+  nostrDm: {
+    getThreadNpub: (input: { threadId: string }) => Promise<ThreadNpubInfo>;
   };
 }

@@ -8,6 +8,11 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
 } from "./model";
 import { ModelSelection } from "./orchestration";
+import {
+  DEFAULT_NOSTR_DM_SETTINGS,
+  NostrDmSettings,
+  NostrDmSettingsPatch,
+} from "./nostr";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -88,6 +93,11 @@ export const ServerSettings = Schema.Struct({
     codex: CodexSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
+
+  // Nostr DM transport (NIP-17)
+  nostrDm: NostrDmSettings.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_NOSTR_DM_SETTINGS),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -151,5 +161,6 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
     }),
   ),
+  nostrDm: Schema.optionalKey(NostrDmSettingsPatch),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

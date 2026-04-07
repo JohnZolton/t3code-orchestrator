@@ -39,6 +39,14 @@ import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
 import { ServerConfigUpdatedPayload, ServerProviderUpdatedPayload } from "./server";
 import { ServerSettingsPatch } from "./settings";
+import {
+  NOSTR_DM_WS_METHODS,
+  NOSTR_DM_WS_CHANNELS,
+  NostrDmGetStatusInput,
+  NostrDmListMappingsInput,
+  NostrDmGetThreadNpubInput,
+  NostrDmStatus,
+} from "./nostr";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -80,6 +88,11 @@ export const WS_METHODS = {
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+
+  // Nostr DM transport (NIP-17)
+  nostrDmGetStatus: NOSTR_DM_WS_METHODS.getStatus,
+  nostrDmListMappings: NOSTR_DM_WS_METHODS.listMappings,
+  nostrDmGetThreadNpub: NOSTR_DM_WS_METHODS.getThreadNpub,
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -90,6 +103,7 @@ export const WS_CHANNELS = {
   serverWelcome: "server.welcome",
   serverConfigUpdated: "server.configUpdated",
   serverProvidersUpdated: "server.providersUpdated",
+  nostrDmStatus: NOSTR_DM_WS_CHANNELS.status,
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -149,6 +163,11 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateSettings, Schema.Struct({ patch: ServerSettingsPatch })),
+
+  // Nostr DM methods
+  tagRequestBody(WS_METHODS.nostrDmGetStatus, NostrDmGetStatusInput),
+  tagRequestBody(WS_METHODS.nostrDmListMappings, NostrDmListMappingsInput),
+  tagRequestBody(WS_METHODS.nostrDmGetThreadNpub, NostrDmGetThreadNpubInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
@@ -186,6 +205,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
+  readonly [WS_CHANNELS.nostrDmStatus]: typeof NostrDmStatus.Type;
 }
 
 export type WsPushChannel = keyof WsPushPayloadByChannel;
@@ -220,6 +240,10 @@ export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
 );
+export const WsPushNostrDmStatus = makeWsPushSchema(
+  WS_CHANNELS.nostrDmStatus,
+  NostrDmStatus,
+);
 
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.gitActionProgress,
@@ -228,6 +252,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverProvidersUpdated,
   WS_CHANNELS.terminalEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
+  WS_CHANNELS.nostrDmStatus,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
 
@@ -238,6 +263,7 @@ export const WsPush = Schema.Union([
   WsPushGitActionProgress,
   WsPushTerminalEvent,
   WsPushOrchestrationDomainEvent,
+  WsPushNostrDmStatus,
 ]);
 export type WsPush = typeof WsPush.Type;
 

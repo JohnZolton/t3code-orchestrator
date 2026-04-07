@@ -54,6 +54,9 @@ import { searchWorkspaceEntries } from "./workspaceEntries";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import { NostrDmGateway } from "./nostr/Services/NostrDmGateway.ts";
+import { NostrDmThreadKeysRepository } from "./persistence/Services/NostrThreadKeys.ts";
+import { generateThreadKeypair } from "./nostr/generateKeypair.ts";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
@@ -219,7 +222,9 @@ export type ServerRuntimeServices =
   | Keybindings
   | ServerSettingsService
   | Open
-  | AnalyticsService;
+  | AnalyticsService
+  | NostrDmGateway
+  | NostrDmThreadKeysRepository;
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
   "ServerLifecycleError",
@@ -647,6 +652,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Scope.provide(orchestrationReactor.start(), subscriptionsScope);
+
+  // Start Nostr DM gateway (no-op if disabled in settings)
+  const nostrDmGateway = yield* NostrDmGateway;
+  yield* Scope.provide(nostrDmGateway.start(), subscriptionsScope);
+
   yield* readiness.markOrchestrationSubscriptionsReady;
 
   let welcomeBootstrapProjectId: ProjectId | undefined;
@@ -935,6 +945,49 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.serverUpdateSettings: {
         const body = stripRequestTag(request.body);
         return yield* serverSettingsManager.updateSettings(body.patch);
+      }
+
+      // Nostr DM methods
+      case WS_METHODS.nostrDmGetStatus: {
+        return yield* nostrDmGateway.getStatus();
+      }
+
+      case WS_METHODS.nostrDmListMappings: {
+        return [] as const;
+      }
+
+      case WS_METHODS.nostrDmGetThreadNpub: {
+        const body = stripRequestTag(request.body);
+        const threadKeysRepo = yield* NostrDmThreadKeysRepository;
+
+        // Check if this thread already has a keypair
+        const existing = yield* threadKeysRepo.getByThreadId({
+          threadId: body.threadId,
+        }).pipe(Effect.catch(() => Effect.succeed(Option.none())));
+
+        if (Option.isSome(existing)) {
+          const { npubEncode } = await import("nostr-tools/nip19");
+          return {
+            threadId: existing.value.threadId,
+            npub: npubEncode(existing.value.pubkeyHex),
+            pubkeyHex: existing.value.pubkeyHex,
+          };
+        }
+
+        // Generate a new keypair for this thread
+        const keypair = generateThreadKeypair();
+        yield* threadKeysRepo.upsert({
+          threadId: body.threadId,
+          seckeyHex: keypair.seckeyHex,
+          pubkeyHex: keypair.pubkeyHex,
+          createdAt: new Date().toISOString(),
+        }).pipe(Effect.catch(() => Effect.void));
+
+        return {
+          threadId: body.threadId,
+          npub: keypair.npub,
+          pubkeyHex: keypair.pubkeyHex,
+        };
       }
 
       default: {

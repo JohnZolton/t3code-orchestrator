@@ -215,6 +215,10 @@ export function createWsNativeApi(): NativeApi {
       getSettings: () => transport.request(WS_METHODS.serverGetSettings),
       updateSettings: (patch) => transport.request(WS_METHODS.serverUpdateSettings, { patch }),
     },
+    nostrDm: {
+      getThreadNpub: (input: { threadId: string }) =>
+        transport.request(WS_METHODS.nostrDmGetThreadNpub, input),
+    },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       dispatchCommand: (command) =>

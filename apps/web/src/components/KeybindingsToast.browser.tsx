@@ -64,6 +64,14 @@ function createBaseServerConfig(): ServerConfig {
         codex: { enabled: true, binaryPath: "", homePath: "", customModels: [] },
         claudeAgent: { enabled: true, binaryPath: "", customModels: [] },
       },
+      nostrDm: {
+        enabled: false,
+        pollIntervalMs: 5000,
+        pubkey: "",
+        seckey: "",
+        relays: { nip65Relays: [], inboxRelays: [], bootstrapRelays: [] },
+        allowedSenders: [],
+      },
     },
   };
 }

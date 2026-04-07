@@ -34,6 +34,9 @@ import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { RoutingTextGenerationLive } from "./git/Layers/RoutingTextGeneration";
 import { PtyAdapter } from "./terminal/Services/PTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { Nip17GatewayLive } from "./nostr/Layers/Nip17Gateway.ts";
+import { NostrDmThreadKeysRepositoryLive } from "./persistence/Layers/NostrThreadKeys.ts";
+import { NostrAllowedPubkeysRepositoryLive } from "./persistence/Layers/NostrAllowedPubkeys.ts";
 
 type RuntimePtyAdapterLoader = {
   layer: Layer.Layer<PtyAdapter, never, FileSystem.FileSystem | Path.Path>;
@@ -136,11 +139,20 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(textGenerationLayer),
   );
 
+  const nostrDmGatewayLayer = Nip17GatewayLive.pipe(
+    Layer.provide(NostrDmThreadKeysRepositoryLive),
+    Layer.provide(NostrAllowedPubkeysRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+
   return Layer.mergeAll(
     orchestrationReactorLayer,
     GitCoreLive,
     gitManagerLayer,
     terminalLayer,
     KeybindingsLive,
+    nostrDmGatewayLayer,
+    NostrDmThreadKeysRepositoryLive,
+    NostrAllowedPubkeysRepositoryLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
