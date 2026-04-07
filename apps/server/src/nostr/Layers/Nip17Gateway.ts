@@ -22,8 +22,15 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { NostrDmThreadKeysRepository } from "../../persistence/Services/NostrThreadKeys.ts";
 import type { NostrDmThreadKeyRow } from "../../persistence/Services/NostrThreadKeys.ts";
+import { NostrAllowedPubkeysRepository } from "../../persistence/Services/NostrAllowedPubkeys.ts";
 
 import { NostrDmGateway, type NostrDmGatewayShape } from "../Services/NostrDmGateway.ts";
+
+import { SimplePool } from "nostr-tools/pool";
+import { getConversationKey, decrypt as nip44decrypt, encrypt as nip44encrypt } from "nostr-tools/nip44";
+import { hexToBytes, bytesToHex } from "nostr-tools/utils";
+import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
+import { decode as nip19decode } from "nostr-tools/nip19";
 
 const serverCommandId = (tag: string) =>
   `server:nostrDm:${tag}:${crypto.randomUUID()}` as unknown as CommandId;
@@ -64,6 +71,7 @@ const makeNip17Gateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const settingsService = yield* ServerSettingsService;
   const threadKeysRepo = yield* NostrDmThreadKeysRepository;
+  const allowedPubkeysRepo = yield* NostrAllowedPubkeysRepository;
 
   const statusRef = yield* Ref.make<NostrDmStatus>({
     status: "disabled",
@@ -103,32 +111,45 @@ const makeNip17Gateway = Effect.gen(function* () {
         }
       }
 
-      // Import nostr-tools
-      const { SimplePool } = await import("nostr-tools/pool");
-      const { getConversationKey, decrypt: nip44decrypt, encrypt: nip44encrypt } = await import("nostr-tools/nip44");
-      const { hexToBytes, bytesToHex } = await import("nostr-tools/utils");
-      const { finalizeEvent, getPublicKey } = await import("nostr-tools/pure");
-      const { decode: nip19decode } = await import("nostr-tools/nip19");
+      // Load allowed pubkeys from DB
+      let allowedPubkeys = yield* allowedPubkeysRepo
+        .list()
+        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<{ pubkeyHex: string }>)));
 
-      // Resolve owner pubkey (who replies go to)
-      let ownerPubkeyHex: string | null = null;
+      // Also seed from AUTH_NPUB env var if set and not already in DB
       const rawOwner = process.env.AUTH_NPUB ?? "";
-      if (rawOwner.startsWith("npub1")) {
-        try {
-          const decoded = nip19decode(rawOwner);
-          ownerPubkeyHex = typeof decoded.data === "string"
-            ? decoded.data
-            : bytesToHex(decoded.data as Uint8Array);
-        } catch {}
-      } else if (rawOwner.length === 64) {
-        ownerPubkeyHex = rawOwner;
+      if (rawOwner) {
+        let envPubkeyHex: string | null = null;
+        if (rawOwner.startsWith("npub1")) {
+          try {
+            const decoded = nip19decode(rawOwner);
+            envPubkeyHex = typeof decoded.data === "string"
+              ? decoded.data
+              : bytesToHex(decoded.data as Uint8Array);
+          } catch {}
+        } else if (rawOwner.length === 64) {
+          envPubkeyHex = rawOwner;
+        }
+        if (envPubkeyHex && !allowedPubkeys.some((p) => p.pubkeyHex === envPubkeyHex)) {
+          yield* allowedPubkeysRepo
+            .add({ pubkeyHex: envPubkeyHex as any, label: "from AUTH_NPUB env", createdAt: new Date().toISOString() })
+            .pipe(Effect.catch(() => Effect.void));
+          // Reload
+          allowedPubkeys = yield* allowedPubkeysRepo
+            .list()
+            .pipe(Effect.catch(() => Effect.succeed(allowedPubkeys)));
+        }
       }
 
-      if (!ownerPubkeyHex) {
-        yield* Effect.logWarning("NIP-17 gateway: AUTH_NPUB not set — outbound replies disabled.");
-      } else {
-        yield* Effect.log(`NIP-17 gateway: replies will go to ${ownerPubkeyHex.slice(0, 12)}...`);
+      const allowedSet = new Set(allowedPubkeys.map((p) => p.pubkeyHex));
+
+      if (allowedSet.size === 0) {
+        yield* Effect.logWarning("NIP-17 gateway: no allowed pubkeys configured — DMs disabled.");
+        yield* Effect.logWarning("NIP-17 gateway: add a pubkey via the UI or set AUTH_NPUB in .env.");
+        return;
       }
+
+      yield* Effect.log(`NIP-17 gateway: ${allowedSet.size} allowed pubkey(s).`);
 
       const pool = new SimplePool();
       for (const relay of DEFAULT_RELAYS) {
@@ -140,6 +161,7 @@ const makeNip17Gateway = Effect.gen(function* () {
       const threadIdToSeckey = new Map(keys.map((k) => [k.threadId, k.seckeyHex]));
       const knownPubkeys = new Set(keys.map((k) => k.pubkeyHex));
       const seen = new Set<string>();
+      const threadLastSender = new Map<string, string>(); // threadId → sender pubkey hex
 
       yield* Effect.log(`NIP-17 gateway: ${keys.length} key(s). Connecting to ${DEFAULT_RELAYS.length} relays...`);
 
@@ -214,7 +236,14 @@ const makeNip17Gateway = Effect.gen(function* () {
           rumor.pubkey = seal.pubkey;
           if (rumor.kind !== 14 || !rumor.content?.trim()) return;
 
+          // ── Allowlist: only accept DMs from allowed pubkeys ──────
+          if (!allowedSet.has(rumor.pubkey)) {
+            return; // Silently drop DMs from unknown senders
+          }
+
+          // Track sender for outbound replies
           const threadId = targetThreadId;
+          threadLastSender.set(threadId, rumor.pubkey);
           Effect.runFork(
             Effect.gen(function* () {
               yield* Effect.log(`NIP-17 DM on thread ${threadId.slice(0, 8)}...: "${rumor.content.slice(0, 50)}"`);
@@ -244,29 +273,32 @@ const makeNip17Gateway = Effect.gen(function* () {
       yield* Effect.log("NIP-17 DM gateway started.");
 
       // ── Outbound replies ────────────────────────────────────────
-      if (ownerPubkeyHex) {
-        const ownerPk = ownerPubkeyHex;
-        Effect.runFork(
-          Stream.runForEach(orchestrationEngine.streamDomainEvents, (event: OrchestrationEvent) =>
-            Effect.gen(function* () {
-              if (event.type !== "thread.message-sent") return;
-              const payload = (event as any).payload;
-              if (payload.role !== "assistant" || !payload.text?.trim()) return;
+      Effect.runFork(
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event: OrchestrationEvent) =>
+          Effect.gen(function* () {
+            if (event.type !== "thread.message-sent") return;
+            const payload = (event as any).payload;
+            if (payload.role !== "assistant" || !payload.text?.trim()) return;
 
-              const keyRow = yield* threadKeysRepo
-                .getByThreadId({ threadId: payload.threadId })
-                .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-              if (Option.isNone(keyRow)) return;
+            const keyRow = yield* threadKeysRepo
+              .getByThreadId({ threadId: payload.threadId })
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            if (Option.isNone(keyRow)) return;
 
-              yield* Effect.log(`NIP-17 reply → owner (${payload.text.length} chars)`);
-              yield* Effect.tryPromise({
-                try: () => sendReply(keyRow.value.seckeyHex, ownerPk, payload.text),
-                catch: () => ({ _tag: "NostrDmError" as const, detail: "Reply failed" }),
-              }).pipe(Effect.catch(() => Effect.void));
-            }).pipe(Effect.catch(() => Effect.void)),
-          ),
-        );
-      }
+            // Reply to whoever last DM'd this thread
+            const recipientPubkey = threadLastSender.get(payload.threadId);
+            if (!recipientPubkey || !allowedSet.has(recipientPubkey)) return;
+
+            yield* Effect.log(
+              `NIP-17 reply → ${recipientPubkey.slice(0, 12)}... (${payload.text.length} chars)`,
+            );
+            yield* Effect.tryPromise({
+              try: () => sendReply(keyRow.value.seckeyHex, recipientPubkey, payload.text),
+              catch: () => ({ _tag: "NostrDmError" as const, detail: "Reply failed" }),
+            }).pipe(Effect.catch(() => Effect.void));
+          }).pipe(Effect.catch(() => Effect.void)),
+        ),
+      );
 
       // ── Poll for new keys, hot-add subscriptions ────────────────
       while (true) {

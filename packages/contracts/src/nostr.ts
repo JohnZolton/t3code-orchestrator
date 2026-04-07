@@ -115,10 +115,20 @@ export const ThreadNpubInfo = Schema.Struct({
 });
 export type ThreadNpubInfo = typeof ThreadNpubInfo.Type;
 
+export const AllowedPubkeyInfo = Schema.Struct({
+  pubkeyHex: TrimmedNonEmptyString,
+  npub: TrimmedNonEmptyString,
+  label: Schema.NullOr(Schema.String),
+});
+export type AllowedPubkeyInfo = typeof AllowedPubkeyInfo.Type;
+
 export const NOSTR_DM_WS_METHODS = {
   getStatus: "nostrDm.getStatus",
   listMappings: "nostrDm.listMappings",
   getThreadNpub: "nostrDm.getThreadNpub",
+  addAllowedPubkey: "nostrDm.addAllowedPubkey",
+  removeAllowedPubkey: "nostrDm.removeAllowedPubkey",
+  listAllowedPubkeys: "nostrDm.listAllowedPubkeys",
 } as const;
 
 export const NOSTR_DM_WS_CHANNELS = {
@@ -132,3 +142,11 @@ export const NostrDmListMappingsInput = Schema.Struct({});
 export const NostrDmGetThreadNpubInput = Schema.Struct({
   threadId: TrimmedNonEmptyString,
 });
+export const NostrDmAddAllowedPubkeyInput = Schema.Struct({
+  pubkey: TrimmedNonEmptyString,
+  label: Schema.optional(Schema.String),
+});
+export const NostrDmRemoveAllowedPubkeyInput = Schema.Struct({
+  pubkeyHex: TrimmedNonEmptyString,
+});
+export const NostrDmListAllowedPubkeysInput = Schema.Struct({});

@@ -57,7 +57,10 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { NostrDmGateway } from "./nostr/Services/NostrDmGateway.ts";
 import { NostrDmThreadKeysRepository } from "./persistence/Services/NostrThreadKeys.ts";
+import { NostrAllowedPubkeysRepository } from "./persistence/Services/NostrAllowedPubkeys.ts";
 import { generateThreadKeypair, npubFromHex } from "./nostr/generateKeypair.ts";
+import { decode as nip19decode } from "nostr-tools/nip19";
+import { bytesToHex } from "nostr-tools/utils";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
@@ -225,7 +228,8 @@ export type ServerRuntimeServices =
   | Open
   | AnalyticsService
   | NostrDmGateway
-  | NostrDmThreadKeysRepository;
+  | NostrDmThreadKeysRepository
+  | NostrAllowedPubkeysRepository;
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
   "ServerLifecycleError",
@@ -981,7 +985,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           seckeyHex: keypair.seckeyHex,
           pubkeyHex: keypair.pubkeyHex,
           createdAt: new Date().toISOString(),
-          lastSenderPubkey: null,
         }).pipe(Effect.catch(() => Effect.void));
 
         // Publish inbox relays (kind 10050) so DM clients can find this thread
@@ -1018,6 +1021,45 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           npub: keypair.npub,
           pubkeyHex: keypair.pubkeyHex,
         };
+      }
+
+      case WS_METHODS.nostrDmAddAllowedPubkey: {
+        const body = stripRequestTag(request.body);
+        const allowedRepo = yield* NostrAllowedPubkeysRepository;
+
+        // Accept npub1 or hex
+        let pubkeyHex = body.pubkey;
+        if (pubkeyHex.startsWith("npub1")) {
+          const decoded = nip19decode(pubkeyHex);
+          pubkeyHex = typeof decoded.data === "string"
+            ? decoded.data
+            : bytesToHex(decoded.data as Uint8Array);
+        }
+
+        yield* allowedRepo.add({
+          pubkeyHex: pubkeyHex as any,
+          label: body.label ?? null,
+          createdAt: new Date().toISOString(),
+        }).pipe(Effect.catch(() => Effect.void));
+
+        return { pubkeyHex, npub: npubFromHex(pubkeyHex), label: body.label ?? null };
+      }
+
+      case WS_METHODS.nostrDmRemoveAllowedPubkey: {
+        const body = stripRequestTag(request.body);
+        const allowedRepo = yield* NostrAllowedPubkeysRepository;
+        yield* allowedRepo.remove(body.pubkeyHex).pipe(Effect.catch(() => Effect.void));
+        return { ok: true };
+      }
+
+      case WS_METHODS.nostrDmListAllowedPubkeys: {
+        const allowedRepo = yield* NostrAllowedPubkeysRepository;
+        const rows = yield* allowedRepo.list().pipe(Effect.catch(() => Effect.succeed([])));
+        return (rows as any[]).map((r: any) => ({
+          pubkeyHex: r.pubkeyHex,
+          npub: npubFromHex(r.pubkeyHex),
+          label: r.label,
+        }));
       }
 
       default: {

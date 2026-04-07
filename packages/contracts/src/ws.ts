@@ -45,6 +45,9 @@ import {
   NostrDmGetStatusInput,
   NostrDmListMappingsInput,
   NostrDmGetThreadNpubInput,
+  NostrDmAddAllowedPubkeyInput,
+  NostrDmRemoveAllowedPubkeyInput,
+  NostrDmListAllowedPubkeysInput,
   NostrDmStatus,
 } from "./nostr";
 
@@ -93,6 +96,9 @@ export const WS_METHODS = {
   nostrDmGetStatus: NOSTR_DM_WS_METHODS.getStatus,
   nostrDmListMappings: NOSTR_DM_WS_METHODS.listMappings,
   nostrDmGetThreadNpub: NOSTR_DM_WS_METHODS.getThreadNpub,
+  nostrDmAddAllowedPubkey: NOSTR_DM_WS_METHODS.addAllowedPubkey,
+  nostrDmRemoveAllowedPubkey: NOSTR_DM_WS_METHODS.removeAllowedPubkey,
+  nostrDmListAllowedPubkeys: NOSTR_DM_WS_METHODS.listAllowedPubkeys,
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -168,6 +174,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.nostrDmGetStatus, NostrDmGetStatusInput),
   tagRequestBody(WS_METHODS.nostrDmListMappings, NostrDmListMappingsInput),
   tagRequestBody(WS_METHODS.nostrDmGetThreadNpub, NostrDmGetThreadNpubInput),
+  tagRequestBody(WS_METHODS.nostrDmAddAllowedPubkey, NostrDmAddAllowedPubkeyInput),
+  tagRequestBody(WS_METHODS.nostrDmRemoveAllowedPubkey, NostrDmRemoveAllowedPubkeyInput),
+  tagRequestBody(WS_METHODS.nostrDmListAllowedPubkeys, NostrDmListAllowedPubkeysInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
