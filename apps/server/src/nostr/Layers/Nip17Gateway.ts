@@ -318,6 +318,16 @@ const makeNip17Gateway = Effect.gen(function* () {
       Effect.runFork(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event: OrchestrationEvent) =>
           Effect.gen(function* () {
+            // Clear Nostr flag when a turn is started from the UI (not from us)
+            if (event.type === "thread.turn-start-requested") {
+              const cmdId = (event as any).payload?.commandId ?? (event as any).commandId ?? "";
+              if (!cmdId.startsWith("server:nostrDm:")) {
+                const tid = (event as any).payload?.threadId;
+                if (tid) threadLastSender.delete(tid);
+              }
+              return;
+            }
+
             if (event.type !== "thread.message-sent") return;
             const payload = (event as any).payload;
             if (payload.role !== "assistant" || !payload.text?.trim()) return;
