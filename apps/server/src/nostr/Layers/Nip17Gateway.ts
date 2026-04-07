@@ -25,6 +25,7 @@ import type { NostrDmThreadKeyRow } from "../../persistence/Services/NostrThread
 import { NostrAllowedPubkeysRepository } from "../../persistence/Services/NostrAllowedPubkeys.ts";
 
 import { NostrDmGateway, type NostrDmGatewayShape } from "../Services/NostrDmGateway.ts";
+import { generateThreadKeypair } from "../generateKeypair.ts";
 
 import { SimplePool } from "nostr-tools/pool";
 import { getConversationKey, decrypt as nip44decrypt, encrypt as nip44encrypt } from "nostr-tools/nip44";
@@ -267,7 +268,6 @@ const makeNip17Gateway = Effect.gen(function* () {
             Effect.runFork(
               Effect.gen(function* () {
                 yield* Effect.log(`NIP-17 command: ${cmd} on thread ${threadId.slice(0, 8)}...`);
-                // Interrupt current turn first, then stop session
                 yield* orchestrationEngine.dispatch({
                   type: "thread.turn.interrupt",
                   commandId: serverCommandId("nip17-interrupt"),
@@ -280,6 +280,110 @@ const makeNip17Gateway = Effect.gen(function* () {
                   threadId: threadId as ThreadId,
                   createdAt: new Date().toISOString(),
                 } as any).pipe(Effect.catch(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void)),
+            );
+            return;
+          }
+
+          // ── !new <prompt>: create a new thread and DM the user from it
+          if (cmd.startsWith("!new ") || cmd === "!new") {
+            const prompt = messageText.slice(4).trim() || "New thread";
+            const senderPubkey = rumor.pubkey;
+
+            Effect.runFork(
+              Effect.gen(function* () {
+                yield* Effect.log(`NIP-17 command: !new "${prompt.slice(0, 50)}"`);
+
+                // Get the project from the read model
+                const readModel = yield* orchestrationEngine.getReadModel();
+                const project = readModel.projects.find((p: any) => p.deletedAt === null);
+                if (!project) {
+                  yield* Effect.logWarning("!new: no project available");
+                  return;
+                }
+
+                const newThreadId = crypto.randomUUID();
+                const now = new Date().toISOString();
+
+                // Create the thread
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.create",
+                  commandId: serverCommandId("nip17-new-thread"),
+                  threadId: newThreadId as ThreadId,
+                  projectId: project.id,
+                  title: prompt.slice(0, 80),
+                  modelSelection: project.defaultModelSelection ?? { provider: "codex" as const, model: "gpt-5-codex" },
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  branch: null,
+                  worktreePath: null,
+                  createdAt: now,
+                } as any);
+
+                // Generate keypair for the new thread
+                const keypair = generateThreadKeypair();
+                yield* threadKeysRepo.upsert({
+                  threadId: newThreadId,
+                  seckeyHex: keypair.seckeyHex,
+                  pubkeyHex: keypair.pubkeyHex,
+                  createdAt: now,
+                } as any).pipe(Effect.catch(() => Effect.void));
+
+                // Add to subscription maps so the gateway picks it up
+                knownPubkeys.add(keypair.pubkeyHex);
+                pubkeyToThreadId.set(keypair.pubkeyHex, newThreadId);
+                threadIdToSeckey.set(newThreadId, keypair.seckeyHex);
+                threadLastSender.set(newThreadId, senderPubkey);
+
+                // Subscribe to DMs for the new thread
+                pool.subscribeMany(DEFAULT_RELAYS, { kinds: [1059], "#p": [keypair.pubkeyHex] } as any, {
+                  onevent: handleGiftWrap,
+                  oneose: () => {},
+                });
+
+                yield* Effect.log(`!new: created thread ${newThreadId.slice(0, 8)}... npub=${keypair.npub.slice(0, 20)}...`);
+
+                // Publish inbox relays for the new thread
+                try {
+                  const secBytes = hexToBytes(keypair.seckeyHex);
+                  const relayTags = DEFAULT_RELAYS.map((r) => ["relay", r]);
+                  const inboxEvent = finalizeEvent({
+                    kind: 10050,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: relayTags,
+                    content: "",
+                  }, secBytes);
+                  await Promise.allSettled(
+                    pool.publish(DEFAULT_RELAYS, inboxEvent as any).map((p: Promise<any>) =>
+                      Promise.race([p, new Promise((r) => setTimeout(r, 5000))]),
+                    ),
+                  );
+                } catch {}
+
+                // Wait a moment for relay propagation
+                yield* Effect.sleep("2 seconds");
+
+                // DM the user FROM the new thread's npub
+                try {
+                  const greeting = `New thread: ${prompt}`;
+                  sendReply(keypair.seckeyHex, senderPubkey, greeting);
+                  yield* Effect.log(`!new: sent initial DM from new thread to ${senderPubkey.slice(0, 12)}...`);
+                } catch (e) {
+                  yield* Effect.logWarning(`!new: failed to send initial DM`);
+                }
+
+                // Start the turn on the new thread
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.turn.start",
+                  commandId: serverCommandId("nip17-turn"),
+                  threadId: newThreadId as ThreadId,
+                  message: { messageId: serverMessageId(), role: "user" as const, text: prompt, attachments: [] },
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  createdAt: new Date().toISOString(),
+                } as any);
+
+                yield* updateStatus({ activeMappings: knownPubkeys.size });
               }).pipe(Effect.catch(() => Effect.void)),
             );
             return;
