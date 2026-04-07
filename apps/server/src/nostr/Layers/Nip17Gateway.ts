@@ -69,8 +69,6 @@ function resolveOwnerPubkey(): string | null {
   return raw;
 }
 
-const GATEWAY_STATE_KEY_LAST_SEEN = "last_seen_timestamp";
-
 const makeNip17Gateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const settingsService = yield* ServerSettingsService;
@@ -78,26 +76,32 @@ const makeNip17Gateway = Effect.gen(function* () {
   const allowedPubkeysRepo = yield* NostrAllowedPubkeysRepository;
   const sql = yield* SqlClient.SqlClient;
 
-  // ── Gateway state persistence helpers ─────────────────────────
-  const getLastSeenTimestamp = () =>
+  // ── Persistent dedup: track processed event IDs in SQLite ──────
+  const loadSeenIds = () =>
     Effect.tryPromise({
       try: async () => {
         const rows = await Effect.runPromise(
-          sql`SELECT value FROM nostr_gateway_state WHERE key = ${GATEWAY_STATE_KEY_LAST_SEEN}`,
+          sql`SELECT value FROM nostr_gateway_state WHERE key = 'seen_event_ids'`,
         );
-        if (rows.length > 0 && rows[0]!.value) return parseInt(rows[0]!.value as string, 10);
-        return 0;
+        if (rows.length > 0 && rows[0]!.value) {
+          try { return new Set(JSON.parse(rows[0]!.value as string) as string[]); } catch {}
+        }
+        return new Set<string>();
       },
-      catch: () => 0 as number,
-    }).pipe(Effect.catch(() => Effect.succeed(0)));
+      catch: () => new Set<string>(),
+    }).pipe(Effect.catch(() => Effect.succeed(new Set<string>())));
 
-  const setLastSeenTimestamp = (ts: number) =>
+  const persistSeenIds = (ids: Set<string>) =>
     Effect.tryPromise({
-      try: () =>
-        Effect.runPromise(
-          sql`INSERT INTO nostr_gateway_state (key, value) VALUES (${GATEWAY_STATE_KEY_LAST_SEEN}, ${String(ts)})
+      try: () => {
+        // Keep last 5000 IDs to prevent unbounded growth
+        const arr = [...ids];
+        const trimmed = arr.length > 5000 ? arr.slice(arr.length - 5000) : arr;
+        return Effect.runPromise(
+          sql`INSERT INTO nostr_gateway_state (key, value) VALUES ('seen_event_ids', ${JSON.stringify(trimmed)})
               ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-        ),
+        );
+      },
       catch: () => void 0,
     }).pipe(Effect.catch(() => Effect.void));
 
@@ -184,10 +188,9 @@ const makeNip17Gateway = Effect.gen(function* () {
         try { pool.ensureRelay(relay); } catch {}
       }
 
-      // Load last-seen timestamp to skip already-processed messages
-      const lastSeenTs = yield* getLastSeenTimestamp();
-      let currentMaxTs = lastSeenTs;
-      yield* Effect.log(`NIP-17 gateway: last seen timestamp=${lastSeenTs} (${lastSeenTs ? new Date(lastSeenTs * 1000).toISOString() : "never"})`);
+      // Load persisted seen event IDs to skip already-processed messages
+      const persistedSeenIds = yield* loadSeenIds();
+      yield* Effect.log(`NIP-17 gateway: ${persistedSeenIds.size} previously seen event ID(s).`);
 
       // Shared state for subscriptions
       const pubkeyToThreadId = new Map(keys.map((k) => [k.pubkeyHex, k.threadId]));
@@ -247,19 +250,16 @@ const makeNip17Gateway = Effect.gen(function* () {
 
       // ── Inbound handler (shared by all subscriptions) ───────────
       function handleGiftWrap(event: any) {
-        if (seen.has(event.id)) return;
-        seen.add(event.id);
-        if (seen.size > 50_000) { const e = [...seen]; for (let i = 0; i < 25_000; i++) seen.delete(e[i]!); }
+        const eventId: string = event.id;
+        if (!eventId) return;
 
-        // Skip events we've already processed (survives restarts)
-        const eventTs: number = event.created_at ?? 0;
-        if (eventTs > 0 && eventTs <= lastSeenTs) return;
+        // Dedup: skip if seen in this session OR in persisted set from prior sessions
+        if (seen.has(eventId) || persistedSeenIds.has(eventId)) return;
+        seen.add(eventId);
+        persistedSeenIds.add(eventId);
 
-        // Update high-water mark and persist periodically
-        if (eventTs > currentMaxTs) {
-          currentMaxTs = eventTs;
-          Effect.runFork(setLastSeenTimestamp(eventTs));
-        }
+        // Persist seen IDs every time (debounced by Effect.runFork)
+        Effect.runFork(persistSeenIds(persistedSeenIds));
 
         const pTags = (event.tags ?? []).filter((t: string[]) => t[0] === "p").map((t: string[]) => t[1]);
         let targetThreadId: string | null = null;
@@ -459,11 +459,9 @@ const makeNip17Gateway = Effect.gen(function* () {
         } catch {}
       }
 
-      // ── Start initial subscription (only fetch events newer than last seen)
+      // ── Start initial subscription ──────────────────────────────
       const allPubkeys = [...knownPubkeys];
-      const subFilter: any = { kinds: [1059], "#p": allPubkeys };
-      if (lastSeenTs > 0) subFilter.since = lastSeenTs;
-      pool.subscribeMany(DEFAULT_RELAYS, subFilter, {
+      pool.subscribeMany(DEFAULT_RELAYS, { kinds: [1059], "#p": allPubkeys } as any, {
         onevent: handleGiftWrap,
         oneose: () => {},
       });
