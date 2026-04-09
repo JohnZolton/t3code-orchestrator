@@ -9,10 +9,7 @@ import type { ReactNode } from "react";
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
-import {
-  normalizeClaudeModelOptionsWithCapabilities,
-  normalizeCodexModelOptionsWithCapabilities,
-} from "@t3tools/shared/model";
+import { normalizeProviderModelOptionsWithCapabilities } from "@t3tools/shared/model";
 
 export type ComposerProviderStateInput = {
   provider: ProviderKind;
@@ -31,7 +28,12 @@ export type ComposerProviderState = {
   modelPickerIconClassName?: string;
 };
 
+export type ComposerProviderControls = {
+  showInteractionModeToggle: boolean;
+};
+
 type ProviderRegistryEntry = {
+  controls: ComposerProviderControls;
   getState: (input: ComposerProviderStateInput) => ComposerProviderState;
   renderTraitsMenuContent: (input: {
     threadRef?: ScopedThreadRef;
@@ -73,16 +75,20 @@ function getProviderStateFromCapabilities(
       ? providerOptions.effort
       : "reasoningEffort" in providerOptions
         ? providerOptions.reasoningEffort
-        : null
+        : "variant" in providerOptions
+          ? providerOptions.variant
+          : null
     : null;
 
-  const promptEffort = resolveEffort(caps, rawEffort) ?? null;
+  const promptEffort =
+    provider === "opencode" ? (rawEffort ?? null) : (resolveEffort(caps, rawEffort) ?? null);
 
   // Normalize options for dispatch
-  const normalizedOptions =
-    provider === "codex"
-      ? normalizeCodexModelOptionsWithCapabilities(caps, providerOptions)
-      : normalizeClaudeModelOptionsWithCapabilities(caps, providerOptions);
+  const normalizedOptions = normalizeProviderModelOptionsWithCapabilities(
+    provider,
+    caps,
+    providerOptions,
+  );
 
   // Ultrathink styling (driven by capabilities data, not provider identity)
   const ultrathinkActive =
@@ -100,8 +106,14 @@ function getProviderStateFromCapabilities(
   };
 }
 
+const DEFAULT_PROVIDER_CONTROLS: ComposerProviderControls = {
+  showInteractionModeToggle: true,
+};
+
+
 const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
   codex: {
+    controls: { ...DEFAULT_PROVIDER_CONTROLS },
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: ({
       threadRef,
@@ -147,6 +159,7 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
       ),
   },
   claudeAgent: {
+    controls: { ...DEFAULT_PROVIDER_CONTROLS },
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: ({
       threadRef,
@@ -191,10 +204,60 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
         />
       ),
   },
+  opencode: {
+    controls: { ...DEFAULT_PROVIDER_CONTROLS, showInteractionModeToggle: false },
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: ({
+      threadRef,
+      draftId,
+      model,
+      models,
+      modelOptions,
+      prompt,
+      onPromptChange,
+    }) =>
+      !hasComposerTraitsTarget({ threadRef, draftId }) ? null : (
+        <TraitsMenuContent
+          provider="opencode"
+          models={models}
+          {...(threadRef ? { threadRef } : {})}
+          {...(draftId ? { draftId } : {})}
+          model={model}
+          modelOptions={modelOptions}
+          prompt={prompt}
+          onPromptChange={onPromptChange}
+        />
+      ),
+    renderTraitsPicker: ({
+      threadRef,
+      draftId,
+      model,
+      models,
+      modelOptions,
+      prompt,
+      onPromptChange,
+    }) =>
+      !hasComposerTraitsTarget({ threadRef, draftId }) ? null : (
+        <TraitsPicker
+          provider="opencode"
+          models={models}
+          {...(threadRef ? { threadRef } : {})}
+          {...(draftId ? { draftId } : {})}
+          model={model}
+          modelOptions={modelOptions}
+          prompt={prompt}
+          onPromptChange={onPromptChange}
+        />
+      ),
+  },
 };
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
   return composerProviderRegistry[input.provider].getState(input);
+}
+
+export function getComposerProviderControls(provider: ProviderKind): ComposerProviderControls {
+  return composerProviderRegistry[provider].controls;
 }
 
 export function renderProviderTraitsMenuContent(input: {

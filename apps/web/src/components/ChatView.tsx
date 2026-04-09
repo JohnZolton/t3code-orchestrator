@@ -28,7 +28,11 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime";
-import { applyClaudePromptEffortPrefix, normalizeModelSlug } from "@t3tools/shared/model";
+import {
+  applyClaudePromptEffortPrefix,
+  createModelSelection,
+  normalizeModelSlug,
+} from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -189,6 +193,7 @@ import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPa
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import {
+  getComposerProviderControls,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
@@ -1260,14 +1265,14 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [composerModelOptions, prompt, selectedModel, selectedProvider, selectedProviderModels],
   );
+  const composerProviderControls = useMemo(
+    () => getComposerProviderControls(selectedProvider),
+    [selectedProvider],
+  );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(
-    () => ({
-      provider: selectedProvider,
-      model: selectedModel,
-      ...(selectedModelOptionsForDispatch ? { options: selectedModelOptionsForDispatch } : {}),
-    }),
+    () => createModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
     [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
   );
   const selectedModelForPicker = selectedModel;
@@ -1727,6 +1732,7 @@ export default function ChatView(props: ChatViewProps) {
       codex: providerStatuses.find((provider) => provider.provider === "codex")?.models ?? [],
       claudeAgent:
         providerStatuses.find((provider) => provider.provider === "claudeAgent")?.models ?? [],
+      opencode: providerStatuses.find((provider) => provider.provider === "opencode")?.models ?? [],
     }),
     [providerStatuses],
   );
@@ -3425,14 +3431,13 @@ export default function ChatView(props: ChatViewProps) {
         }
       }
       const title = truncate(titleSeed);
-      const threadCreateModelSelection: ModelSelection = {
-        provider: selectedProvider,
-        model:
-          selectedModel ||
+      const threadCreateModelSelection = createModelSelection(
+        selectedProvider,
+        selectedModel ||
           activeProject.defaultModelSelection?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        ...(selectedModelSelection.options ? { options: selectedModelSelection.options } : {}),
-      };
+        selectedModelSelection.options,
+      );
 
       // Auto-title from first message
       if (isFirstMessage && isServerThread) {
@@ -4684,6 +4689,9 @@ export default function ChatView(props: ChatViewProps) {
                             interactionMode={interactionMode}
                             planSidebarOpen={planSidebarOpen}
                             runtimeMode={runtimeMode}
+                            showInteractionModeToggle={
+                              composerProviderControls.showInteractionModeToggle
+                            }
                             traitsMenuContent={providerTraitsMenuContent}
                             onToggleInteractionMode={toggleInteractionMode}
                             onTogglePlanSidebar={togglePlanSidebar}
@@ -4706,28 +4714,32 @@ export default function ChatView(props: ChatViewProps) {
                               className="mx-0.5 hidden h-4 sm:block"
                             />
 
-                            <Button
-                              variant="ghost"
-                              className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                              size="sm"
-                              type="button"
-                              onClick={toggleInteractionMode}
-                              title={
-                                interactionMode === "plan"
-                                  ? "Plan mode — click to return to normal build mode"
-                                  : "Default mode — click to enter plan mode"
-                              }
-                            >
-                              <BotIcon />
-                              <span className="sr-only sm:not-sr-only">
-                                {interactionMode === "plan" ? "Plan" : "Build"}
-                              </span>
-                            </Button>
+                            {composerProviderControls.showInteractionModeToggle ? (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                                  size="sm"
+                                  type="button"
+                                  onClick={toggleInteractionMode}
+                                  title={
+                                    interactionMode === "plan"
+                                      ? "Plan mode — click to return to normal build mode"
+                                      : "Default mode — click to enter plan mode"
+                                  }
+                                >
+                                  <BotIcon />
+                                  <span className="sr-only sm:not-sr-only">
+                                    {interactionMode === "plan" ? "Plan" : "Build"}
+                                  </span>
+                                </Button>
 
-                            <Separator
-                              orientation="vertical"
-                              className="mx-0.5 hidden h-4 sm:block"
-                            />
+                                <Separator
+                                  orientation="vertical"
+                                  className="mx-0.5 hidden h-4 sm:block"
+                                />
+                              </>
+                            ) : null}
 
                             <Select
                               value={runtimeMode}
