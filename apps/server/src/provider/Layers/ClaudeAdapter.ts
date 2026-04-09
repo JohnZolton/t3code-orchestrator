@@ -2718,7 +2718,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: process.env,
+        env: { ...process.env, CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1" },
         ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
       };
 

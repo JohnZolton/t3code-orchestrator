@@ -30,6 +30,7 @@
     "@pierre/diffs": "^1.1.0-beta.16",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
+    "nostr-tools": "^2.23.3",
     "open": "^10.1.0"
   },
   "devDependencies": {

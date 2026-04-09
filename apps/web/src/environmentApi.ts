@@ -43,6 +43,12 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       onDomainEvent: (callback, options) =>
         rpcClient.orchestration.onDomainEvent(callback, options),
     },
+    nostrDm: {
+      getThreadNpub: rpcClient.nostrDm.getThreadNpub,
+      addAllowedPubkey: rpcClient.nostrDm.addAllowedPubkey,
+      removeAllowedPubkey: rpcClient.nostrDm.removeAllowedPubkey,
+      listAllowedPubkeys: () => rpcClient.nostrDm.listAllowedPubkeys().then((r) => [...r]),
+    },
   };
 }
 

@@ -31,6 +31,7 @@ import {
   FileSystem,
   Layer,
   ManagedRuntime,
+  Option,
   Path,
   Stream,
 } from "effect";
@@ -100,6 +101,9 @@ import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
+import { NostrDmGateway } from "./nostr/Services/NostrDmGateway.ts";
+import { NostrDmThreadKeysRepository } from "./persistence/Services/NostrThreadKeys.ts";
+import { NostrAllowedPubkeysRepository } from "./persistence/Services/NostrAllowedPubkeys.ts";
 
 const defaultProjectId = ProjectId.makeUnsafe("project-default");
 const defaultThreadId = ThreadId.makeUnsafe("thread-default");
@@ -431,6 +435,36 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.checkpointDiffQuery,
         }),
       ),
+      Layer.provide(
+        Layer.mock(NostrDmGateway)({
+          start: () => Effect.void,
+          getStatus: () =>
+            Effect.succeed({
+              status: "disabled",
+              lastMessageAt: null,
+              lastError: null,
+              activeMappings: 0,
+              botPubkey: null,
+            }),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(NostrDmThreadKeysRepository)({
+          upsert: () => Effect.void,
+          getByThreadId: () => Effect.succeed(Option.none()),
+          getByPubkey: () => Effect.succeed(Option.none()),
+          list: () => Effect.succeed([]),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(NostrAllowedPubkeysRepository)({
+          add: () => Effect.void,
+          remove: () => Effect.void,
+          list: () => Effect.succeed([]),
+          isAllowed: () => Effect.succeed(false),
+        }),
+      ),
+      Layer.provideMerge(SqlitePersistenceMemory),
     );
 
     const appLayer = servedRoutesLayer.pipe(

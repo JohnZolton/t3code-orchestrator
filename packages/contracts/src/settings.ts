@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas";
+import { DEFAULT_NOSTR_DM_SETTINGS, NostrDmSettings, NostrDmSettingsPatch } from "./nostr";
 import {
   ClaudeModelOptions,
   CodexModelOptions,
@@ -95,6 +96,9 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(() => ({}))),
+
+  // Nostr DM transport (NIP-17)
+  nostrDm: NostrDmSettings.pipe(Schema.withDecodingDefault(() => DEFAULT_NOSTR_DM_SETTINGS)),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -177,5 +181,6 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
     }),
   ),
+  nostrDm: Schema.optionalKey(NostrDmSettingsPatch),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

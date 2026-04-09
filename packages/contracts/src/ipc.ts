@@ -51,6 +51,7 @@ import type {
 } from "./orchestration";
 import { EditorId } from "./editor";
 import { ServerSettings, ServerSettingsPatch } from "./settings";
+import type { AllowedPubkeyInfo, ThreadNpubInfo } from "./nostr";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -232,5 +233,11 @@ export interface EnvironmentApi {
         onResubscribe?: () => void;
       },
     ) => () => void;
+  };
+  nostrDm: {
+    getThreadNpub: (input: { threadId: string }) => Promise<ThreadNpubInfo>;
+    addAllowedPubkey: (input: { pubkey: string; label?: string }) => Promise<AllowedPubkeyInfo>;
+    removeAllowedPubkey: (input: { pubkeyHex: string }) => Promise<{ ok: boolean }>;
+    listAllowedPubkeys: () => Promise<AllowedPubkeyInfo[]>;
   };
 }

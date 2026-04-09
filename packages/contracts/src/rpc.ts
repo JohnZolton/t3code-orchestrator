@@ -73,6 +73,7 @@ import {
   ServerUpsertKeybindingResult,
 } from "./server";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings";
+import { NostrDmRpcGroup } from "./nostr";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -379,4 +380,4 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
-);
+).merge(NostrDmRpcGroup);

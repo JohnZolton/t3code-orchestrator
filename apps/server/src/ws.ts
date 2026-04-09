@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Queue, Ref, Schema, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect";
 import {
   type AuthAccessStreamEvent,
   AuthSessionId,
@@ -7,6 +7,7 @@ import {
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
+  NOSTR_DM_WS_METHODS,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   OrchestrationGetFullThreadDiffError,
@@ -24,6 +25,12 @@ import {
 import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { decode as nip19decode } from "nostr-tools/nip19";
+import { bytesToHex } from "nostr-tools/utils";
+import { hexToBytes } from "nostr-tools/utils";
+import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
+import { SimplePool } from "nostr-tools/pool";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
@@ -61,6 +68,10 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService";
 import { respondToAuthError } from "./auth/http";
+import { NostrDmGateway } from "./nostr/Services/NostrDmGateway";
+import { NostrDmThreadKeysRepository } from "./persistence/Services/NostrThreadKeys";
+import { NostrAllowedPubkeysRepository } from "./persistence/Services/NostrAllowedPubkeys";
+import { generateThreadKeypair, npubFromHex } from "./nostr/generateKeypair";
 
 function toAuthAccessStreamEvent(
   change: BootstrapCredentialChange | SessionCredentialChange,
@@ -127,6 +138,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const serverAuth = yield* ServerAuth;
       const bootstrapCredentials = yield* BootstrapCredentialService;
       const sessions = yield* SessionCredentialService;
+      const nostrDmGateway = yield* NostrDmGateway;
+      const nostrThreadKeysRepo = yield* NostrDmThreadKeysRepository;
+      const nostrAllowedPubkeysRepo = yield* NostrAllowedPubkeysRepository;
+      const sql = yield* SqlClient.SqlClient;
       const serverCommandId = (tag: string) =>
         CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -907,6 +922,235 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               );
             }),
             { "rpc.aggregate": "auth" },
+          ),
+
+        // ── Nostr DM handlers ──────────────────────────────────────
+        [NOSTR_DM_WS_METHODS.getStatus]: (_input) =>
+          observeRpcEffect(NOSTR_DM_WS_METHODS.getStatus, nostrDmGateway.getStatus(), {
+            "rpc.aggregate": "nostrDm",
+          }),
+        [NOSTR_DM_WS_METHODS.getThreadNpub]: (input) =>
+          observeRpcEffect(
+            NOSTR_DM_WS_METHODS.getThreadNpub,
+            Effect.gen(function* () {
+              const existing = yield* nostrThreadKeysRepo
+                .getByThreadId({ threadId: input.threadId })
+                .pipe(Effect.orDie);
+
+              if (Option.isSome(existing)) {
+                const row = existing.value;
+                return {
+                  threadId: row.threadId,
+                  npub: npubFromHex(row.pubkeyHex),
+                  pubkeyHex: row.pubkeyHex,
+                };
+              }
+
+              // Generate new keypair for this thread
+              const keypair = generateThreadKeypair();
+              const now = new Date().toISOString();
+              yield* nostrThreadKeysRepo
+                .upsert({
+                  threadId: input.threadId,
+                  seckeyHex: keypair.seckeyHex as any,
+                  pubkeyHex: keypair.pubkeyHex as any,
+                  createdAt: now,
+                })
+                .pipe(Effect.orDie);
+
+              // Persist active thread in nostr_gateway_state for cross-service sync
+              yield* Effect.gen(function* () {
+                const rows =
+                  yield* sql`SELECT value FROM nostr_gateway_state WHERE key = 'active_threads'`;
+                const arr = rows as any[];
+                let activeSet = new Set<string>();
+                if (arr.length > 0 && arr[0]?.value) {
+                  try {
+                    activeSet = new Set(JSON.parse(arr[0].value) as string[]);
+                  } catch {}
+                }
+                activeSet.add(input.threadId);
+                const json = JSON.stringify([...activeSet]);
+                yield* sql`INSERT INTO nostr_gateway_state (key, value) VALUES ('active_threads', ${json})
+                           ON CONFLICT (key) DO UPDATE SET value = excluded.value`;
+              }).pipe(Effect.catch(() => Effect.void));
+
+              // Publish inbox relays for the new thread identity
+              yield* Effect.tryPromise({
+                try: async () => {
+                  const DEFAULT_RELAYS = [
+                    "wss://relay.damus.io",
+                    "wss://nos.lol",
+                    "wss://relay.nostr.band",
+                    "wss://relay.primal.net",
+                    "wss://relay.0xchat.com",
+                    "wss://inbox.nostr.wine",
+                    "wss://auth.nostr1.com",
+                  ];
+                  const secBytes = hexToBytes(keypair.seckeyHex);
+                  const relayTags = DEFAULT_RELAYS.map((r) => ["relay", r]);
+                  const inboxEvent = finalizeEvent(
+                    {
+                      kind: 10050,
+                      created_at: Math.floor(Date.now() / 1000),
+                      tags: relayTags,
+                      content: "",
+                    },
+                    secBytes,
+                  );
+                  const pool = new SimplePool();
+                  await Promise.allSettled(
+                    pool
+                      .publish(DEFAULT_RELAYS, inboxEvent as any)
+                      .map((p: Promise<any>) =>
+                        Promise.race([p, new Promise((r) => setTimeout(r, 5000))]),
+                      ),
+                  );
+                  pool.close(DEFAULT_RELAYS);
+                },
+                catch: () => void 0,
+              }).pipe(Effect.catch(() => Effect.void));
+
+              // Send initial DM to owner so they can reply to this thread
+              const ownerNpub = process.env.AUTH_NPUB ?? "";
+              if (ownerNpub) {
+                yield* Effect.tryPromise({
+                  try: async () => {
+                    let ownerPubkeyHex: string | null = null;
+                    if (ownerNpub.startsWith("npub1")) {
+                      const decoded = nip19decode(ownerNpub);
+                      ownerPubkeyHex =
+                        typeof decoded.data === "string"
+                          ? decoded.data
+                          : bytesToHex(decoded.data as Uint8Array);
+                    } else if (ownerNpub.length === 64) {
+                      ownerPubkeyHex = ownerNpub;
+                    }
+                    if (!ownerPubkeyHex) return;
+
+                    const nip44 = await import("nostr-tools/nip44");
+                    const { getConversationKey } = nip44;
+                    const nip44encrypt = nip44.encrypt;
+                    const DEFAULT_RELAYS = [
+                      "wss://relay.damus.io",
+                      "wss://nos.lol",
+                      "wss://relay.nostr.band",
+                      "wss://relay.primal.net",
+                      "wss://relay.0xchat.com",
+                      "wss://inbox.nostr.wine",
+                      "wss://auth.nostr1.com",
+                    ];
+                    const secBytes = hexToBytes(keypair.seckeyHex);
+                    const senderPub = getPublicKey(secBytes);
+                    const now = Math.floor(Date.now() / 1000);
+                    const twoDays = 2 * 24 * 60 * 60;
+                    const randomTs = () => now - Math.floor(Math.random() * twoDays);
+
+                    const rumor = {
+                      id: crypto.randomUUID().replace(/-/g, "").slice(0, 64),
+                      pubkey: senderPub,
+                      created_at: now,
+                      kind: 14,
+                      tags: [["p", ownerPubkeyHex]],
+                      content: `Thread ${input.threadId.slice(0, 8)}... is now reachable via Nostr DM.`,
+                    };
+                    const sealConvKey = getConversationKey(secBytes, ownerPubkeyHex);
+                    const seal = finalizeEvent(
+                      {
+                        kind: 13,
+                        created_at: randomTs(),
+                        tags: [],
+                        content: nip44encrypt(JSON.stringify(rumor), sealConvKey),
+                      },
+                      secBytes,
+                    );
+                    const ephSec = crypto.getRandomValues(new Uint8Array(32));
+                    const wrapConvKey = getConversationKey(ephSec, ownerPubkeyHex);
+                    const gw = finalizeEvent(
+                      {
+                        kind: 1059,
+                        created_at: randomTs(),
+                        tags: [["p", ownerPubkeyHex]],
+                        content: nip44encrypt(JSON.stringify(seal), wrapConvKey),
+                      },
+                      ephSec,
+                    );
+                    const pool = new SimplePool();
+                    await Promise.allSettled(
+                      pool
+                        .publish(DEFAULT_RELAYS, gw as any)
+                        .map((p: Promise<any>) =>
+                          Promise.race([p, new Promise((r) => setTimeout(r, 5000))]),
+                        ),
+                    );
+                    pool.close(DEFAULT_RELAYS);
+                  },
+                  catch: () => void 0,
+                }).pipe(Effect.catch(() => Effect.void));
+              }
+
+              return {
+                threadId: input.threadId,
+                npub: keypair.npub,
+                pubkeyHex: keypair.pubkeyHex,
+              };
+            }),
+            { "rpc.aggregate": "nostrDm" },
+          ),
+        [NOSTR_DM_WS_METHODS.addAllowedPubkey]: (input) =>
+          observeRpcEffect(
+            NOSTR_DM_WS_METHODS.addAllowedPubkey,
+            Effect.gen(function* () {
+              let pubkeyHex: string;
+              if (input.pubkey.startsWith("npub1")) {
+                const decoded = nip19decode(input.pubkey);
+                pubkeyHex =
+                  typeof decoded.data === "string"
+                    ? decoded.data
+                    : bytesToHex(decoded.data as Uint8Array);
+              } else {
+                pubkeyHex = input.pubkey;
+              }
+
+              yield* nostrAllowedPubkeysRepo
+                .add({
+                  pubkeyHex: pubkeyHex as any,
+                  label: input.label ?? null,
+                  createdAt: new Date().toISOString(),
+                })
+                .pipe(Effect.orDie);
+
+              return {
+                pubkeyHex,
+                npub: npubFromHex(pubkeyHex),
+                label: input.label ?? null,
+              };
+            }),
+            { "rpc.aggregate": "nostrDm" },
+          ),
+        [NOSTR_DM_WS_METHODS.removeAllowedPubkey]: (input) =>
+          observeRpcEffect(
+            NOSTR_DM_WS_METHODS.removeAllowedPubkey,
+            nostrAllowedPubkeysRepo.remove(input.pubkeyHex).pipe(
+              Effect.orDie,
+              Effect.map(() => ({ ok: true })),
+            ),
+            { "rpc.aggregate": "nostrDm" },
+          ),
+        [NOSTR_DM_WS_METHODS.listAllowedPubkeys]: (_input) =>
+          observeRpcEffect(
+            NOSTR_DM_WS_METHODS.listAllowedPubkeys,
+            nostrAllowedPubkeysRepo.list().pipe(
+              Effect.orDie,
+              Effect.map((rows) =>
+                rows.map((row) => ({
+                  pubkeyHex: row.pubkeyHex,
+                  npub: npubFromHex(row.pubkeyHex),
+                  label: row.label,
+                })),
+              ),
+            ),
+            { "rpc.aggregate": "nostrDm" },
           ),
       });
     }),

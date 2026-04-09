@@ -15,6 +15,7 @@ import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScr
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { ThreadNpubQR } from "./ThreadNpubQR";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -111,6 +112,7 @@ export const ChatHeader = memo(function ChatHeader({
             activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
           />
         )}
+        <ThreadNpubQR environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
         <Tooltip>
           <TooltipTrigger
             render={

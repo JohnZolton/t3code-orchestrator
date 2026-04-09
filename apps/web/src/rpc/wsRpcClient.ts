@@ -5,6 +5,7 @@ import {
   type GitStatusResult,
   type GitStatusStreamEvent,
   type LocalApi,
+  NOSTR_DM_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type ServerSettingsPatch,
   WS_METHODS,
@@ -107,6 +108,13 @@ export interface WsRpcClient {
     readonly getFullThreadDiff: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.getFullThreadDiff>;
     readonly replayEvents: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.replayEvents>;
     readonly onDomainEvent: RpcStreamMethod<typeof WS_METHODS.subscribeOrchestrationDomainEvents>;
+  };
+  readonly nostrDm: {
+    readonly getStatus: RpcUnaryNoArgMethod<typeof NOSTR_DM_WS_METHODS.getStatus>;
+    readonly getThreadNpub: RpcUnaryMethod<typeof NOSTR_DM_WS_METHODS.getThreadNpub>;
+    readonly addAllowedPubkey: RpcUnaryMethod<typeof NOSTR_DM_WS_METHODS.addAllowedPubkey>;
+    readonly removeAllowedPubkey: RpcUnaryMethod<typeof NOSTR_DM_WS_METHODS.removeAllowedPubkey>;
+    readonly listAllowedPubkeys: RpcUnaryNoArgMethod<typeof NOSTR_DM_WS_METHODS.listAllowedPubkeys>;
   };
 }
 
@@ -237,6 +245,18 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           listener,
           options,
         ),
+    },
+    nostrDm: {
+      getStatus: () =>
+        transport.request((client) => client[NOSTR_DM_WS_METHODS.getStatus]({})),
+      getThreadNpub: (input) =>
+        transport.request((client) => client[NOSTR_DM_WS_METHODS.getThreadNpub](input)),
+      addAllowedPubkey: (input) =>
+        transport.request((client) => client[NOSTR_DM_WS_METHODS.addAllowedPubkey](input)),
+      removeAllowedPubkey: (input) =>
+        transport.request((client) => client[NOSTR_DM_WS_METHODS.removeAllowedPubkey](input)),
+      listAllowedPubkeys: () =>
+        transport.request((client) => client[NOSTR_DM_WS_METHODS.listAllowedPubkeys]({})),
     },
   };
 }

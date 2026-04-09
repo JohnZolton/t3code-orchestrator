@@ -67,6 +67,9 @@ import {
 } from "./auth/http";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth";
+import { Nip17GatewayLive } from "./nostr/Layers/Nip17Gateway";
+import { NostrDmThreadKeysRepositoryLive } from "./persistence/Layers/NostrThreadKeys";
+import { NostrAllowedPubkeysRepositoryLive } from "./persistence/Layers/NostrAllowedPubkeys";
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -210,6 +213,11 @@ const AuthLayerLive = ServerAuthLive.pipe(
 );
 
 const RuntimeDependenciesLive = ReactorLayerLive.pipe(
+  // Nostr DM (deps satisfied by layers below: SqlClient, OrchestrationEngine, ServerSettings)
+  Layer.provideMerge(Nip17GatewayLive),
+  Layer.provideMerge(NostrDmThreadKeysRepositoryLive),
+  Layer.provideMerge(NostrAllowedPubkeysRepositoryLive),
+
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(GitLayerLive),
