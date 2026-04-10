@@ -29,10 +29,18 @@ export const ThreadNpubQR = memo(function ThreadNpubQR({ environmentId, threadId
 
   const handleSendDm = useCallback(async () => {
     setSending(true);
-    try { await ensureNpub(); setSent(true); setTimeout(() => setSent(false), 3000); }
+    try {
+      // Always call the server — even if we have the npub cached, the server
+      // needs to activate the thread and send the initial DM each time.
+      const api = ensureEnvironmentApi(environmentId);
+      const result = await api.nostrDm.getThreadNpub({ threadId });
+      if (result?.npub) { setNpub(result.npub); }
+      setSent(true);
+      setTimeout(() => setSent(false), 3000);
+    }
     catch (e) { console.error("Failed to send thread DM:", e); }
     finally { setSending(false); }
-  }, [ensureNpub]);
+  }, [environmentId, threadId]);
 
   const handleToggleQR = useCallback(async () => {
     if (open) { setOpen(false); return; }

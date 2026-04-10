@@ -937,28 +937,33 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 .getByThreadId({ threadId: input.threadId })
                 .pipe(Effect.orDie);
 
+              let seckeyHex: string;
+              let pubkeyHex: string;
+              let npub: string;
+
               if (Option.isSome(existing)) {
                 const row = existing.value;
-                return {
-                  threadId: row.threadId,
-                  npub: npubFromHex(row.pubkeyHex),
-                  pubkeyHex: row.pubkeyHex,
-                };
+                seckeyHex = row.seckeyHex;
+                pubkeyHex = row.pubkeyHex;
+                npub = npubFromHex(row.pubkeyHex);
+              } else {
+                // Generate new keypair for this thread
+                const keypair = generateThreadKeypair();
+                const now = new Date().toISOString();
+                yield* nostrThreadKeysRepo
+                  .upsert({
+                    threadId: input.threadId,
+                    seckeyHex: keypair.seckeyHex as any,
+                    pubkeyHex: keypair.pubkeyHex as any,
+                    createdAt: now,
+                  })
+                  .pipe(Effect.orDie);
+                seckeyHex = keypair.seckeyHex;
+                pubkeyHex = keypair.pubkeyHex;
+                npub = keypair.npub;
               }
 
-              // Generate new keypair for this thread
-              const keypair = generateThreadKeypair();
-              const now = new Date().toISOString();
-              yield* nostrThreadKeysRepo
-                .upsert({
-                  threadId: input.threadId,
-                  seckeyHex: keypair.seckeyHex as any,
-                  pubkeyHex: keypair.pubkeyHex as any,
-                  createdAt: now,
-                })
-                .pipe(Effect.orDie);
-
-              // Persist active thread in nostr_gateway_state for cross-service sync
+              // Always persist active thread in nostr_gateway_state for cross-service sync
               yield* Effect.gen(function* () {
                 const rows =
                   yield* sql`SELECT value FROM nostr_gateway_state WHERE key = 'active_threads'`;
@@ -975,7 +980,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                            ON CONFLICT (key) DO UPDATE SET value = excluded.value`;
               }).pipe(Effect.catch(() => Effect.void));
 
-              // Publish inbox relays for the new thread identity
+              // Always publish inbox relays for the thread identity
               yield* Effect.tryPromise({
                 try: async () => {
                   const DEFAULT_RELAYS = [
@@ -987,7 +992,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                     "wss://inbox.nostr.wine",
                     "wss://auth.nostr1.com",
                   ];
-                  const secBytes = hexToBytes(keypair.seckeyHex);
+                  const secBytes = hexToBytes(seckeyHex);
                   const relayTags = DEFAULT_RELAYS.map((r) => ["relay", r]);
                   const inboxEvent = finalizeEvent(
                     {
@@ -1007,26 +1012,34 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                       ),
                   );
                   pool.close(DEFAULT_RELAYS);
+                  console.log(`[nostr] Published inbox relays for thread ${input.threadId.slice(0, 8)}`);
                 },
-                catch: () => void 0,
-              }).pipe(Effect.catch(() => Effect.void));
+                catch: (e) => { console.error("[nostr] Failed to publish inbox relays:", e); },
+              }).pipe(Effect.catch((e) => { console.error("[nostr] inbox relay publish effect error:", e); return Effect.void; }));
 
-              // Send initial DM to owner so they can reply to this thread
-              const ownerNpub = process.env.AUTH_NPUB ?? "";
-              if (ownerNpub) {
+              // Always send DM to owner so they can reply to this thread
+              // Read owner pubkey from DB (nostr_allowed_pubkeys) instead of env var
+              const allowedRows = yield* sql`SELECT pubkey_hex FROM nostr_allowed_pubkeys LIMIT 1`.pipe(
+                Effect.catch(() => Effect.succeed([] as any[])),
+              );
+              const ownerPubkeyHex: string | null =
+                (allowedRows as any[])?.[0]?.pubkey_hex ??
+                (() => {
+                  // Fallback to AUTH_NPUB env var
+                  const envNpub = process.env.AUTH_NPUB ?? "";
+                  if (!envNpub) return null;
+                  if (envNpub.startsWith("npub1")) {
+                    const decoded = nip19decode(envNpub);
+                    return typeof decoded.data === "string"
+                      ? decoded.data
+                      : bytesToHex(decoded.data as Uint8Array);
+                  }
+                  return envNpub.length === 64 ? envNpub : null;
+                })();
+              yield* Effect.log(`[nostr] getThreadNpub: ownerPubkeyHex=${ownerPubkeyHex ? ownerPubkeyHex.slice(0, 8) + "..." : "null"}, threadId=${input.threadId.slice(0, 8)}, keyExists=${Option.isSome(existing)}`);
+              if (ownerPubkeyHex) {
                 yield* Effect.tryPromise({
                   try: async () => {
-                    let ownerPubkeyHex: string | null = null;
-                    if (ownerNpub.startsWith("npub1")) {
-                      const decoded = nip19decode(ownerNpub);
-                      ownerPubkeyHex =
-                        typeof decoded.data === "string"
-                          ? decoded.data
-                          : bytesToHex(decoded.data as Uint8Array);
-                    } else if (ownerNpub.length === 64) {
-                      ownerPubkeyHex = ownerNpub;
-                    }
-                    if (!ownerPubkeyHex) return;
 
                     const nip44 = await import("nostr-tools/nip44");
                     const { getConversationKey } = nip44;
@@ -1040,7 +1053,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                       "wss://inbox.nostr.wine",
                       "wss://auth.nostr1.com",
                     ];
-                    const secBytes = hexToBytes(keypair.seckeyHex);
+                    const secBytes = hexToBytes(seckeyHex);
                     const senderPub = getPublicKey(secBytes);
                     const now = Math.floor(Date.now() / 1000);
                     const twoDays = 2 * 24 * 60 * 60;
@@ -1084,15 +1097,18 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                         ),
                     );
                     pool.close(DEFAULT_RELAYS);
+                    console.log(`[nostr] Sent initial DM for thread ${input.threadId.slice(0, 8)} to owner ${ownerPubkeyHex.slice(0, 8)}...`);
                   },
-                  catch: () => void 0,
-                }).pipe(Effect.catch(() => Effect.void));
+                  catch: (e) => { console.error("[nostr] Failed to send initial DM:", e); },
+                }).pipe(Effect.catch((e) => { console.error("[nostr] DM send effect error:", e); return Effect.void; }));
+              } else {
+                yield* Effect.log("[nostr] No owner pubkey found — skipping initial DM send");
               }
 
               return {
                 threadId: input.threadId,
-                npub: keypair.npub,
-                pubkeyHex: keypair.pubkeyHex,
+                npub,
+                pubkeyHex,
               };
             }),
             { "rpc.aggregate": "nostrDm" },

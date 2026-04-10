@@ -221,6 +221,9 @@ const makeNip17Gateway = Effect.gen(function* () {
       // Threads actively mirroring to phone. Persisted in DB so phone button works.
       // Set by: inbound DM, phone button. Cleared by: UI-originated turn.
       const nostrActiveThreads = yield* loadActiveThreadsEffect;
+      // Track threads explicitly cleared by desktop turns, so the poll loop
+      // doesn't re-add them from the DB before the clear propagates.
+      const recentlyDeactivatedThreads = new Set<string>();
       yield* Effect.log(
         `NIP-17 gateway: ${nostrActiveThreads.size} active thread(s) mirroring to phone.`,
       );
@@ -357,6 +360,14 @@ const makeNip17Gateway = Effect.gen(function* () {
           rumor.pubkey = seal.pubkey;
           if (rumor.kind !== 14 || !rumor.content?.trim()) return;
 
+          // ── Dedup on rumor (inner message) to catch per-relay gift wraps ──
+          // NIP-17 creates separate gift wraps per relay, each with a unique
+          // event ID. The gift-wrap dedup above doesn't catch these. Dedup on
+          // the rumor's id or content hash instead.
+          const rumorDedup = rumor.id ?? `${rumor.pubkey}:${rumor.created_at}:${rumor.content}`;
+          if (seen.has(rumorDedup)) return;
+          seen.add(rumorDedup);
+
           // ── Allowlist: only accept DMs from allowed pubkeys ──────
           if (!allowedSet.has(rumor.pubkey)) {
             return; // Silently drop DMs from unknown senders
@@ -366,6 +377,7 @@ const makeNip17Gateway = Effect.gen(function* () {
           const messageText: string = rumor.content.trim();
           // Mark thread as Nostr-active (replies go to phone)
           nostrActiveThreads.add(threadId);
+          recentlyDeactivatedThreads.delete(threadId); // allow re-activation
           Effect.runFork(persistActiveThreads(nostrActiveThreads));
 
           // ── Command parsing: !kill, !stop, !status ──────────────
@@ -599,6 +611,9 @@ const makeNip17Gateway = Effect.gen(function* () {
       // Replies go to phone only when thread is "Nostr-active":
       //   - Set by: inbound DM from phone, or phone button click
       //   - Cleared by: user typing in the UI (non-Nostr turn start)
+      // In-memory nostrActiveThreads is the source of truth.
+      // DB is only for cross-service sync (phone button in ws.ts).
+      // We merge from DB ONLY on activation events, not on every message.
       const ownerPubkey = [...allowedSet][0];
       if (ownerPubkey) {
         Effect.runFork(
@@ -611,7 +626,9 @@ const makeNip17Gateway = Effect.gen(function* () {
                   const tid = (event as any).payload?.threadId;
                   if (tid) {
                     nostrActiveThreads.delete(tid);
-                    Effect.runFork(persistActiveThreads(nostrActiveThreads));
+                    recentlyDeactivatedThreads.add(tid);
+                    // Synchronously persist the cleared state
+                    yield* persistActiveThreads(nostrActiveThreads);
                   }
                 }
                 return;
@@ -621,11 +638,7 @@ const makeNip17Gateway = Effect.gen(function* () {
               const payload = (event as any).payload;
               if (payload.role !== "assistant" || !payload.text?.trim()) return;
 
-              // Reload active threads from DB (phone button writes directly to DB)
-              const freshActive = yield* loadActiveThreadsEffect;
-              for (const tid of freshActive) nostrActiveThreads.add(tid);
-
-              // Only send if thread is Nostr-active
+              // Only send if thread is Nostr-active (in-memory is source of truth)
               if (!nostrActiveThreads.has(payload.threadId)) return;
 
               const secHex = threadIdToSeckey.get(payload.threadId);
@@ -649,6 +662,16 @@ const makeNip17Gateway = Effect.gen(function* () {
         yield* Effect.sleep(`${KEY_POLL_INTERVAL_MS} millis`);
         ticksSinceReconnect++;
 
+        // Sync active threads from DB (phone button in ws.ts writes directly).
+        // Skip threads recently deactivated by a desktop turn — avoid re-adding
+        // before the persist propagates.
+        const freshActive = yield* loadActiveThreadsEffect;
+        for (const tid of freshActive) {
+          if (!nostrActiveThreads.has(tid) && !recentlyDeactivatedThreads.has(tid)) {
+            nostrActiveThreads.add(tid);
+          }
+        }
+
         // Check for new thread keys
         const allKeys = yield* threadKeysRepo
           .list()
@@ -662,6 +685,7 @@ const makeNip17Gateway = Effect.gen(function* () {
             threadIdToSeckey.set(key.threadId, key.seckeyHex);
             // Auto-activate: user just clicked the phone button
             nostrActiveThreads.add(key.threadId);
+            recentlyDeactivatedThreads.delete(key.threadId);
           }
           yield* persistActiveThreads(nostrActiveThreads);
           yield* updateStatus({ activeMappings: knownPubkeys.size });
