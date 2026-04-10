@@ -1272,7 +1272,7 @@ function applyEnvironmentOrchestrationEvent(
       });
     }
 
-    case "thread.message-sent":
+    case "thread.message-sent": {
       return updateThreadState(state, event.payload.threadId, (thread) => {
         const message = mapMessage(thread.environmentId, {
           id: event.payload.messageId,
@@ -1361,6 +1361,7 @@ function applyEnvironmentOrchestrationEvent(
           updatedAt: event.occurredAt,
         };
       });
+    }
 
     case "thread.session-set":
       return updateThreadState(state, event.payload.threadId, (thread) => ({

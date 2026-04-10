@@ -304,6 +304,8 @@ const makeNip17Gateway = Effect.gen(function* () {
         return relays;
       }
 
+      const PUBLISH_TIMEOUT_MS = 5_000;
+
       async function sendReply(threadSecHex: string, recipientPubkey: string, content: string) {
         const secBytes = hexToBytes(threadSecHex);
         const senderPub = getPublicKey(secBytes);
@@ -316,8 +318,20 @@ const makeNip17Gateway = Effect.gen(function* () {
               );
         for (const chunk of chunks) {
           const gw = createGiftWrap(secBytes, senderPub, recipientPubkey, chunk);
-          // Fire-and-forget — don't wait for relay acks
-          pool.publish(relays, gw as any);
+          const results = await Promise.allSettled(
+            pool
+              .publish(relays, gw as any)
+              .map((p: Promise<any>) =>
+                Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), PUBLISH_TIMEOUT_MS))]),
+              ),
+          );
+          const succeeded = results.filter((r) => r.status === "fulfilled").length;
+          const failed = results.filter((r) => r.status === "rejected").length;
+          if (succeeded > 0) {
+            console.log(`[NIP-17 send] published to ${succeeded}/${relays.length} relays (${failed} failed)`);
+          } else {
+            console.warn(`[NIP-17 send] all ${relays.length} relays failed — message may not be delivered`);
+          }
         }
       }
 
@@ -616,6 +630,9 @@ const makeNip17Gateway = Effect.gen(function* () {
       // We merge from DB ONLY on activation events, not on every message.
       const ownerPubkey = [...allowedSet][0];
       if (ownerPubkey) {
+        // Buffer streaming deltas per messageId, send on completion
+        const streamingBuffers = new Map<string, string>();
+
         Effect.runFork(
           Stream.runForEach(orchestrationEngine.streamDomainEvents, (event: OrchestrationEvent) =>
             Effect.gen(function* () {
@@ -636,17 +653,32 @@ const makeNip17Gateway = Effect.gen(function* () {
 
               if (event.type !== "thread.message-sent") return;
               const payload = (event as any).payload;
-              if (payload.role !== "assistant" || !payload.text?.trim()) return;
+              if (payload.role !== "assistant") return;
 
               // Only send if thread is Nostr-active (in-memory is source of truth)
               if (!nostrActiveThreads.has(payload.threadId)) return;
 
+              const msgId = payload.messageId as string;
+
+              if (payload.streaming) {
+                // Accumulate streaming deltas
+                const existing = streamingBuffers.get(msgId) ?? "";
+                streamingBuffers.set(msgId, existing + (payload.text ?? ""));
+                return;
+              }
+
+              // Completion event: grab buffered text, then clean up
+              const bufferedText = streamingBuffers.get(msgId) ?? "";
+              streamingBuffers.delete(msgId);
+              const fullText = payload.text?.length > 0 ? payload.text : bufferedText;
+              if (!fullText.trim()) return;
+
               const secHex = threadIdToSeckey.get(payload.threadId);
               if (!secHex) return;
 
-              yield* Effect.log(`NIP-17 reply → owner (${payload.text.length} chars)`);
+              yield* Effect.log(`NIP-17 reply → owner (${fullText.length} chars)`);
               yield* Effect.tryPromise({
-                try: () => sendReply(secHex, ownerPubkey, payload.text),
+                try: () => sendReply(secHex, ownerPubkey, fullText),
                 catch: () => ({ _tag: "NostrDmError" as const, detail: "Reply failed" }),
               }).pipe(Effect.catch(() => Effect.void));
             }).pipe(Effect.catch(() => Effect.void)),
