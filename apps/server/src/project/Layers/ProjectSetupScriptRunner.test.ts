@@ -46,6 +46,7 @@ describe("ProjectSetupScriptRunner", () => {
                 readEvents: () => Stream.empty,
                 dispatch: () => Effect.die(new Error("unused")),
                 streamDomainEvents: Stream.empty,
+                subscribeDomainEvents: Effect.succeed(Stream.empty),
               }),
             ),
             Layer.provideMerge(
@@ -114,6 +115,7 @@ describe("ProjectSetupScriptRunner", () => {
                 readEvents: () => Stream.empty,
                 dispatch: () => Effect.die(new Error("unused")),
                 streamDomainEvents: Stream.empty,
+                subscribeDomainEvents: Effect.succeed(Stream.empty),
               }),
             ),
             Layer.provideMerge(

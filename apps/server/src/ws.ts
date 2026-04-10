@@ -583,6 +583,20 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeOrchestrationDomainEvents,
             Effect.gen(function* () {
+              // Eagerly subscribe to the PubSub BEFORE reading the SQLite
+              // replay.  Stream.fromPubSub is lazy (subscribes on first pull),
+              // so reading SQLite first opens a race window: events committed
+              // between the read and the first pull are lost, and the sequence
+              // buffer stalls forever on the missing sequence number.
+              //
+              // subscribeDomainEvents runs PubSub.subscribe immediately, so
+              // every event published after this yield* is guaranteed to appear
+              // in the stream.  Overlap with the replay is harmless — the
+              // sequence buffer already deduplicates via the
+              // `event.sequence < nextSequence` guard.
+              const liveStream = (yield* orchestrationEngine.subscribeDomainEvents).pipe(
+                Stream.mapEffect(enrichProjectEvent),
+              );
               const snapshot = yield* orchestrationEngine.getReadModel();
               const fromSequenceExclusive = snapshot.snapshotSequence;
               const replayEvents: Array<OrchestrationEvent> = yield* Stream.runCollect(
@@ -593,9 +607,6 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 Effect.catch(() => Effect.succeed([] as Array<OrchestrationEvent>)),
               );
               const replayStream = Stream.fromIterable(replayEvents);
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.mapEffect(enrichProjectEvent),
-              );
               const source = Stream.merge(replayStream, liveStream);
               type SequenceState = {
                 readonly nextSequence: number;

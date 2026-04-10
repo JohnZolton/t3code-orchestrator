@@ -194,14 +194,24 @@ export function createEnvironmentConnection(
     }
 
     try {
+      console.log(`[bootstrap] Loading snapshot for ${environmentId} (reason=${reason})...`);
       const snapshot = await input.client.orchestration.getSnapshot();
+      console.log(`[bootstrap] Snapshot loaded: seq=${snapshot.snapshotSequence}, threads=${snapshot.threads?.length ?? 0}, projects=${snapshot.projects?.length ?? 0}`);
       if (!disposed) {
         input.syncSnapshot(snapshot, environmentId);
-        if (recovery.completeSnapshotRecovery(snapshot.snapshotSequence)) {
+        const needsReplay = recovery.completeSnapshotRecovery(snapshot.snapshotSequence);
+        // Only replay if events beyond the snapshot were observed during loading.
+        // The snapshot is authoritative for everything up to snapshotSequence,
+        // so deferred events within that range don't need a replay.
+        const recoveryState = recovery.getState();
+        const actuallyNeedsReplay = needsReplay && recoveryState.highestObservedSequence > snapshot.snapshotSequence;
+        console.log(`[bootstrap] Bootstrap complete. bootstrapped=${recoveryState.bootstrapped}, needsReplay=${needsReplay}, actuallyNeedsReplay=${actuallyNeedsReplay}, highestObserved=${recoveryState.highestObservedSequence}, snapshotSeq=${snapshot.snapshotSequence}`);
+        if (actuallyNeedsReplay) {
           void runReplayRecovery("sequence-gap");
         }
       }
     } catch (error) {
+      console.error(`[bootstrap] SNAPSHOT FAILED:`, error);
       recovery.failSnapshotRecovery();
       throw error;
     }
@@ -238,14 +248,22 @@ export function createEnvironmentConnection(
   const unsubDomainEvent = input.client.orchestration.onDomainEvent(
     (event: Parameters<Parameters<WsRpcClient["orchestration"]["onDomainEvent"]>[0]>[0]) => {
       const action = recovery.classifyDomainEvent(event.sequence);
+      // Diagnostic: log every event classification
+      if (event.type?.includes("message") || event.type?.includes("turn") || action !== "apply") {
+        console.log(`[orch-event] seq=${event.sequence} type=${event.type} → ${action}`);
+      }
       if (action === "apply") {
         pendingDomainEvents.push(event);
         schedulePendingDomainEventFlush();
         return;
       }
       if (action === "recover") {
+        console.warn(`[orch-event] SEQUENCE GAP at seq=${event.sequence}, triggering recovery`);
         flushPendingDomainEvents();
         void runReplayRecovery("sequence-gap");
+      }
+      if (action === "defer") {
+        console.warn(`[orch-event] DEFERRED seq=${event.sequence} type=${event.type} (recovery in-flight or not bootstrapped)`);
       }
     },
     {

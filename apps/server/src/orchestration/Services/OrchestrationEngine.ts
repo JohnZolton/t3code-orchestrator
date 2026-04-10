@@ -16,7 +16,7 @@ import type {
   OrchestrationReadModel,
 } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Effect, Scope, Stream } from "effect";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
@@ -59,8 +59,30 @@ export interface OrchestrationEngineShape {
    * Stream persisted domain events in dispatch order.
    *
    * This is a hot runtime stream (new events only), not a historical replay.
+   * Note: the underlying PubSub subscription is lazy — it only activates when
+   * the stream is first consumed.  Use `subscribeDomainEvents` when you need
+   * the subscription to start eagerly (e.g. before a replay read).
    */
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
+
+  /**
+   * Eagerly subscribe to the domain-event PubSub and return a live stream.
+   *
+   * Unlike `streamDomainEvents` (whose PubSub subscription is deferred until
+   * first pull), this Effect immediately creates the subscription so that any
+   * events published after the returned Effect completes are guaranteed to
+   * appear in the stream.  The subscription is scoped — it will be cleaned up
+   * when the surrounding scope closes.
+   *
+   * Use this in contexts where you need to read a SQLite snapshot *after*
+   * the subscription is active, preventing a race where events committed
+   * between the read and the first pull would be lost.
+   */
+  readonly subscribeDomainEvents: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
+    never,
+    Scope.Scope
+  >;
 }
 
 /**

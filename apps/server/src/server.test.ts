@@ -407,6 +407,7 @@ const buildAppUnderTest = (options?: {
           readEvents: () => Stream.empty,
           dispatch: () => Effect.succeed({ sequence: 0 }),
           streamDomainEvents: Stream.empty,
+          subscribeDomainEvents: Effect.succeed(Stream.empty),
           ...options?.layers?.orchestrationEngine,
         }),
       ),
@@ -3377,6 +3378,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return Stream.make(makeEvent(2), makeEvent(3));
               },
               streamDomainEvents: Stream.make(makeEvent(3), makeEvent(4)),
+              subscribeDomainEvents: Effect.succeed(Stream.make(makeEvent(3), makeEvent(4))),
             },
           },
         });
@@ -3442,6 +3444,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 },
               } satisfies Extract<OrchestrationEvent, { type: "project.meta-updated" }>),
             streamDomainEvents: Stream.empty,
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
           },
           repositoryIdentityResolver: {
             resolve: () => {
@@ -3512,6 +3515,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 updatedAt: "2026-04-05T00:00:00.000Z",
               },
             } satisfies Extract<OrchestrationEvent, { type: "project.meta-updated" }>),
+            subscribeDomainEvents: Effect.succeed(Stream.make({
+              sequence: 1,
+              eventId: EventId.makeUnsafe("event-1"),
+              aggregateKind: "project",
+              aggregateId: defaultProjectId,
+              occurredAt: "2026-04-05T00:00:00.000Z",
+              commandId: null,
+              causationEventId: null,
+              correlationId: null,
+              metadata: {},
+              type: "project.meta-updated",
+              payload: {
+                projectId: defaultProjectId,
+                title: "Renamed Project",
+                updatedAt: "2026-04-05T00:00:00.000Z",
+              },
+            } satisfies Extract<OrchestrationEvent, { type: "project.meta-updated" }>)),
           },
           repositoryIdentityResolver: {
             resolve: () => Effect.succeed(repositoryIdentity),

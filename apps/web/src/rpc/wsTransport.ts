@@ -150,15 +150,16 @@ export class WsTransport {
 
           const formattedError = formatErrorMessage(error);
           if (!isTransportConnectionErrorMessage(formattedError)) {
-            console.warn("WebSocket RPC subscription failed", {
+            // Non-transport errors: log prominently and retry with backoff
+            // instead of permanently killing the subscription.
+            console.warn("WebSocket RPC subscription failed (will retry)", {
               error: formattedError,
             });
-            return;
+          } else {
+            console.warn("WebSocket RPC subscription disconnected", {
+              error: formattedError,
+            });
           }
-
-          console.warn("WebSocket RPC subscription disconnected", {
-            error: formattedError,
-          });
           await sleep(retryDelayMs);
         }
       }

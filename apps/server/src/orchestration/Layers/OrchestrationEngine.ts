@@ -7,6 +7,7 @@ import type {
 import { OrchestrationCommand } from "@t3tools/contracts";
 import {
   Cause,
+  Channel,
   Deferred,
   Duration,
   Effect,
@@ -301,6 +302,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
       return Stream.fromPubSub(eventPubSub);
     },
+    // Eagerly subscribe to the PubSub, returning a stream that is guaranteed
+    // to receive every event published after the returned Effect completes.
+    // Use this when you need to read a snapshot between subscribing and
+    // pulling, so no events fall into a gap.
+    subscribeDomainEvents: Effect.map(
+      PubSub.subscribe(eventPubSub),
+      (subscription) =>
+        Stream.fromChannel(Channel.fromSubscriptionArray(subscription)),
+    ),
   } satisfies OrchestrationEngineShape;
 });
 
