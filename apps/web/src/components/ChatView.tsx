@@ -1371,6 +1371,7 @@ export default function ChatView(props: ChatViewProps) {
     threadError: activeThread?.error,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const showInterruptAction = isWorking || !latestTurnSettled;
   const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
@@ -1387,7 +1388,7 @@ export default function ChatView(props: ChatViewProps) {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
-    if (phase === "running") {
+    if (showInterruptAction) {
       return "running";
     }
     if (showPlanFollowUpPrompt) {
@@ -1401,8 +1402,8 @@ export default function ChatView(props: ChatViewProps) {
     isConnecting,
     isPreparingWorktree,
     isSendBusy,
-    phase,
     prompt,
+    showInterruptAction,
     showPlanFollowUpPrompt,
   ]);
   const lastSyncedPendingInputRef = useRef<{
@@ -1733,6 +1734,7 @@ export default function ChatView(props: ChatViewProps) {
       claudeAgent:
         providerStatuses.find((provider) => provider.provider === "claudeAgent")?.models ?? [],
       opencode: providerStatuses.find((provider) => provider.provider === "opencode")?.models ?? [],
+      pi: providerStatuses.find((provider) => provider.provider === "pi")?.models ?? [],
     }),
     [providerStatuses],
   );
@@ -4835,7 +4837,7 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                               : null
                           }
-                          isRunning={phase === "running"}
+                          isRunning={showInterruptAction}
                           showPlanFollowUpPrompt={
                             pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                           }

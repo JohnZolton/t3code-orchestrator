@@ -204,4 +204,24 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }));
+
+  it("rehydrates persisted pi bindings", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.makeUnsafe("thread-pi");
+
+      yield* directory.upsert({
+        provider: "pi",
+        threadId,
+      });
+
+      const provider = yield* directory.getProvider(threadId);
+      assert.equal(provider, "pi");
+
+      const binding = yield* directory.getBinding(threadId);
+      assertSome(binding, {
+        threadId,
+        provider: "pi",
+      });
+    }));
 });

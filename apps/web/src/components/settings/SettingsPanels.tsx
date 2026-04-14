@@ -140,6 +140,12 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     serverPasswordDescription:
       "If your OpenCode server requires authentication, enter the password here. NOTE: Stored in plain text on disk",
   },
+  {
+    provider: "pi",
+    title: "Pi",
+    binaryPlaceholder: "Pi binary path",
+    binaryDescription: "Path to the Pi CLI or local runner script",
+  },
 ] as const;
 
 const PROVIDER_STATUS_STYLES = {
@@ -467,6 +473,9 @@ export function GeneralSettingsPanel() {
         DEFAULT_UNIFIED_SETTINGS.providers.opencode.serverPassword ||
       settings.providers.opencode.customModels.length > 0,
     ),
+    pi: Boolean(
+      settings.providers.pi.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.pi.binaryPath,
+    ),
   });
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
@@ -474,6 +483,7 @@ export function GeneralSettingsPanel() {
     codex: "",
     claudeAgent: "",
     opencode: "",
+    pi: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -674,12 +684,14 @@ export function GeneralSettingsPanel() {
     const summary = getProviderSummary(liveProvider);
     const models: ReadonlyArray<ServerProviderModel> =
       liveProvider?.models ??
-      providerConfig.customModels.map((slug) => ({
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      }));
+      (providerSettings.provider === "pi"
+        ? []
+        : providerConfig.customModels.map((slug) => ({
+            slug,
+            name: slug,
+            isCustom: true,
+            capabilities: null,
+          })));
 
     return {
       provider: providerSettings.provider,
@@ -1376,50 +1388,58 @@ export function GeneralSettingsPanel() {
                         })}
                       </div>
 
-                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                        <Input
-                          id={`custom-model-${providerCard.provider}`}
-                          value={customModelInput}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setCustomModelInputByProvider((existing) => ({
-                              ...existing,
-                              [providerCard.provider]: value,
-                            }));
-                            if (customModelError) {
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
-                            }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter") return;
-                            event.preventDefault();
-                            addCustomModel(providerCard.provider);
-                          }}
-                          placeholder={
-                            providerCard.provider === "codex"
-                              ? "gpt-6.7-codex-ultra-preview"
-                              : providerCard.provider === "opencode"
-                                ? "openai/gpt-5"
-                                : "claude-sonnet-5-0"
-                          }
-                          spellCheck={false}
-                        />
-                        <Button
-                          className="shrink-0"
-                          variant="outline"
-                          onClick={() => addCustomModel(providerCard.provider)}
-                        >
-                          <PlusIcon className="size-3.5" />
-                          Add
-                        </Button>
-                      </div>
+                      {providerCard.provider !== "pi" ? (
+                        <>
+                          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                            <Input
+                              id={`custom-model-${providerCard.provider}`}
+                              value={customModelInput}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                setCustomModelInputByProvider((existing) => ({
+                                  ...existing,
+                                  [providerCard.provider]: value,
+                                }));
+                                if (customModelError) {
+                                  setCustomModelErrorByProvider((existing) => ({
+                                    ...existing,
+                                    [providerCard.provider]: null,
+                                  }));
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter") return;
+                                event.preventDefault();
+                                addCustomModel(providerCard.provider);
+                              }}
+                              placeholder={
+                                providerCard.provider === "codex"
+                                  ? "gpt-6.7-codex-ultra-preview"
+                                  : providerCard.provider === "opencode"
+                                    ? "openai/gpt-5"
+                                    : "claude-sonnet-5-0"
+                              }
+                              spellCheck={false}
+                            />
+                            <Button
+                              className="shrink-0"
+                              variant="outline"
+                              onClick={() => addCustomModel(providerCard.provider)}
+                            >
+                              <PlusIcon className="size-3.5" />
+                              Add
+                            </Button>
+                          </div>
 
-                      {customModelError ? (
-                        <p className="mt-2 text-xs text-destructive">{customModelError}</p>
-                      ) : null}
+                          {customModelError ? (
+                            <p className="mt-2 text-xs text-destructive">{customModelError}</p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          Pi models are loaded live from Pi RPC.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </CollapsibleContent>

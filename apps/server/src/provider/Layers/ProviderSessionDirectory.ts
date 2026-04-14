@@ -22,7 +22,12 @@ function decodeProviderKind(
   providerName: string,
   operation: string,
 ): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  if (providerName === "codex" || providerName === "claudeAgent" || providerName === "opencode") {
+  if (
+    providerName === "codex" ||
+    providerName === "claudeAgent" ||
+    providerName === "opencode" ||
+    providerName === "pi"
+  ) {
     return Effect.succeed(providerName);
   }
   return Effect.fail(

@@ -2,6 +2,7 @@ import {
   type ClaudeModelOptions,
   type CodexModelOptions,
   type OpenCodeModelOptions,
+  type PiModelOptions,
   type ProviderKind,
   type ProviderModelOptions,
   type ScopedThreadRef,
@@ -63,6 +64,9 @@ function getRawEffort(
   if (provider === "opencode") {
     return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
   }
+  if (provider === "pi") {
+    return trimOrNull((modelOptions as PiModelOptions | undefined)?.thinkingLevel);
+  }
   return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
 }
 
@@ -106,6 +110,9 @@ function buildNextOptions(
       ...(modelOptions as OpenCodeModelOptions | undefined),
       ...patch,
     } as OpenCodeModelOptions;
+  }
+  if (provider === "pi") {
+    return { ...(modelOptions as PiModelOptions | undefined), ...patch } as PiModelOptions;
   }
   return { ...(modelOptions as ClaudeModelOptions | undefined), ...patch } as ClaudeModelOptions;
 }
@@ -262,7 +269,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         const stripped = prompt.replace(/^Ultrathink:\s*/i, "");
         onPromptChange(stripped);
       }
-      const effortKey = provider === "codex" ? "reasoningEffort" : "effort";
+      const effortKey =
+        provider === "codex" ? "reasoningEffort" : provider === "pi" ? "thinkingLevel" : "effort";
       updateModelOptions(
         buildNextOptions(provider, modelOptions, { [effortKey]: nextOption.value }),
       );
@@ -295,7 +303,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuGroup>
             <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
-              {provider === "opencode" ? "Variant" : "Effort"}
+              {provider === "opencode" ? "Variant" : provider === "pi" ? "Thinking" : "Effort"}
             </div>
             {ultrathinkInBodyText ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">

@@ -18,7 +18,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon, PiIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { getProviderSnapshot } from "../../providerModels";
 
@@ -34,6 +34,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   opencode: OpenCodeIcon,
+  pi: PiIcon,
   cursor: CursorIcon,
 };
 
@@ -46,6 +47,26 @@ function providerIconClassName(
   fallbackClassName: string,
 ): string {
   return provider === "claudeAgent" ? "text-[#d97757]" : fallbackClassName;
+}
+
+function isSelectableLiveProvider(liveProvider: ServerProvider | undefined): boolean {
+  if (!liveProvider) {
+    return true;
+  }
+  if (!liveProvider.enabled || !liveProvider.installed) {
+    return false;
+  }
+  return liveProvider.status === "ready" || liveProvider.models.length > 0;
+}
+
+function providerUnavailableLabel(liveProvider: ServerProvider): string {
+  if (!liveProvider.enabled) {
+    return "Disabled";
+  }
+  if (!liveProvider.installed) {
+    return "Not installed";
+  }
+  return "Unavailable";
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
@@ -149,12 +170,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               const liveProvider = props.providers
                 ? getProviderSnapshot(props.providers, option.value)
                 : undefined;
-              if (liveProvider && liveProvider.status !== "ready") {
-                const unavailableLabel = !liveProvider.enabled
-                  ? "Disabled"
-                  : !liveProvider.installed
-                    ? "Not installed"
-                    : "Unavailable";
+              if (liveProvider && !isSelectableLiveProvider(liveProvider)) {
+                const unavailableLabel = providerUnavailableLabel(liveProvider);
                 return (
                   <MenuItem key={option.value} disabled>
                     <OptionIcon

@@ -91,7 +91,7 @@ function resetComposerDraftStore() {
 }
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: "codex" | "claudeAgent" | "pi",
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -1093,6 +1093,17 @@ describe("composerDraftStore setModelSelection", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider.codex).toEqual(
       modelSelection("codex", "gpt-5.3-codex"),
     );
+  });
+
+  it("stores pi as the active provider on the draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setModelSelection(threadRef, modelSelection("pi", "gpt-5.4"));
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider.pi).toEqual(
+      modelSelection("pi", "gpt-5.4"),
+    );
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBe("pi");
   });
 });
 

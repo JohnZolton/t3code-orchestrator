@@ -413,6 +413,32 @@ describe("store read model sync", () => {
     expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-sonnet-4-6");
   });
 
+  it("preserves pi as the active session provider", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        modelSelection: {
+          provider: "pi",
+          model: "gpt-5.4",
+        },
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "pi",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel, localEnvironmentId);
+
+    expect(threadsOf(next)[0]?.session?.provider).toBe("pi");
+    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("pi");
+  });
+
   it("preserves project and thread updatedAt timestamps from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

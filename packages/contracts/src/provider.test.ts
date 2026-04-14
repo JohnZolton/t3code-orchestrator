@@ -68,6 +68,28 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.modelSelection.options?.fastMode).toBe(true);
     expect(parsed.runtimeMode).toBe("full-access");
   });
+
+  it("accepts pi thinking levels", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "pi",
+      cwd: "/tmp/workspace",
+      modelSelection: {
+        provider: "pi",
+        model: "claude-opus-4-6",
+        options: {
+          thinkingLevel: "high",
+        },
+      },
+      runtimeMode: "full-access",
+    });
+    expect(parsed.provider).toBe("pi");
+    expect(parsed.modelSelection?.provider).toBe("pi");
+    if (parsed.modelSelection?.provider !== "pi") {
+      throw new Error("Expected pi modelSelection");
+    }
+    expect(parsed.modelSelection.options?.thinkingLevel).toBe("high");
+  });
 });
 
 describe("ProviderSendTurnInput", () => {
@@ -112,5 +134,24 @@ describe("ProviderSendTurnInput", () => {
     }
     expect(parsed.modelSelection.options?.effort).toBe("ultrathink");
     expect(parsed.modelSelection.options?.fastMode).toBe(true);
+  });
+
+  it("accepts pi thinking level modelSelection", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      modelSelection: {
+        provider: "pi",
+        model: "gpt-5.4",
+        options: {
+          thinkingLevel: "minimal",
+        },
+      },
+    });
+
+    expect(parsed.modelSelection?.provider).toBe("pi");
+    if (parsed.modelSelection?.provider !== "pi") {
+      throw new Error("Expected pi modelSelection");
+    }
+    expect(parsed.modelSelection.options?.thinkingLevel).toBe("minimal");
   });
 });

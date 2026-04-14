@@ -4,8 +4,9 @@
  * request input.
  *
  * When `modelSelection.provider` is `"claudeAgent"` the request is forwarded to
- * the Claude layer; for any other value (including the default `undefined`) it
- * falls through to the Codex layer.
+ * the Claude layer; `"opencode"` is forwarded to the OpenCode layer; Pi and
+ * any other value (including the default `undefined`) currently fall through to
+ * the Codex layer until Pi-specific text generation routing exists.
  *
  * @module RoutingTextGeneration
  */
@@ -45,7 +46,7 @@ const makeRoutingTextGeneration = Effect.gen(function* () {
   const claude = yield* ClaudeTextGen;
   const openCode = yield* OpenCodeTextGen;
 
-  const route = (provider?: TextGenerationProvider): TextGenerationShape =>
+  const route = (provider?: TextGenerationProvider | "pi"): TextGenerationShape =>
     provider === "claudeAgent" ? claude : provider === "opencode" ? openCode : codex;
 
   return {

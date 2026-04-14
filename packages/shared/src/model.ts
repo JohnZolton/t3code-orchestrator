@@ -7,6 +7,8 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   type OpenCodeModelOptions,
+  type PiModelOptions,
+  type PiThinkingLevel,
   type ProviderKind,
   type ProviderModelOptions,
 } from "@t3tools/contracts";
@@ -145,6 +147,14 @@ export function normalizeOpenCodeModelOptionsWithCapabilities(
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
+export function normalizePiModelOptionsWithCapabilities(
+  caps: ModelCapabilities,
+  modelOptions: PiModelOptions | null | undefined,
+): PiModelOptions | undefined {
+  const thinkingLevel = resolveEffort(caps, modelOptions?.thinkingLevel);
+  return thinkingLevel ? { thinkingLevel: thinkingLevel as PiThinkingLevel } : undefined;
+}
+
 export function normalizeProviderModelOptionsWithCapabilities(
   provider: ProviderKind,
   caps: ModelCapabilities,
@@ -160,6 +170,8 @@ export function normalizeProviderModelOptionsWithCapabilities(
         caps,
         modelOptions as OpenCodeModelOptions,
       );
+    case "pi":
+      return normalizePiModelOptionsWithCapabilities(caps, modelOptions as PiModelOptions);
   }
 }
 
@@ -265,6 +277,12 @@ export function createModelSelection(
         provider,
         model,
         ...(options ? { options: options as OpenCodeModelOptions } : {}),
+      };
+    case "pi":
+      return {
+        provider,
+        model,
+        ...(options ? { options: options as PiModelOptions } : {}),
       };
   }
 }

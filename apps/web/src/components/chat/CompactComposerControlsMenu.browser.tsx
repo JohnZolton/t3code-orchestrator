@@ -280,7 +280,7 @@ describe("CompactComposerControlsMenu", () => {
         showInteractionModeToggle={false}
         onToggleInteractionMode={vi.fn()}
         onTogglePlanSidebar={vi.fn()}
-        onToggleRuntimeMode={vi.fn()}
+        onRuntimeModeChange={vi.fn()}
       />,
       { container: host },
     );

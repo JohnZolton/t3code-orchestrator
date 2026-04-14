@@ -77,7 +77,9 @@ function getProviderStateFromCapabilities(
         ? providerOptions.reasoningEffort
         : "variant" in providerOptions
           ? providerOptions.variant
-          : null
+          : "thinkingLevel" in providerOptions
+            ? providerOptions.thinkingLevel
+            : null
     : null;
 
   const promptEffort =
@@ -109,7 +111,6 @@ function getProviderStateFromCapabilities(
 const DEFAULT_PROVIDER_CONTROLS: ComposerProviderControls = {
   showInteractionModeToggle: true,
 };
-
 
 const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
   codex: {
@@ -240,6 +241,52 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
       !hasComposerTraitsTarget({ threadRef, draftId }) ? null : (
         <TraitsPicker
           provider="opencode"
+          models={models}
+          {...(threadRef ? { threadRef } : {})}
+          {...(draftId ? { draftId } : {})}
+          model={model}
+          modelOptions={modelOptions}
+          prompt={prompt}
+          onPromptChange={onPromptChange}
+        />
+      ),
+  },
+  pi: {
+    controls: { ...DEFAULT_PROVIDER_CONTROLS },
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: ({
+      threadRef,
+      draftId,
+      model,
+      models,
+      modelOptions,
+      prompt,
+      onPromptChange,
+    }) =>
+      !hasComposerTraitsTarget({ threadRef, draftId }) ? null : (
+        <TraitsMenuContent
+          provider="pi"
+          models={models}
+          {...(threadRef ? { threadRef } : {})}
+          {...(draftId ? { draftId } : {})}
+          model={model}
+          modelOptions={modelOptions}
+          prompt={prompt}
+          onPromptChange={onPromptChange}
+        />
+      ),
+    renderTraitsPicker: ({
+      threadRef,
+      draftId,
+      model,
+      models,
+      modelOptions,
+      prompt,
+      onPromptChange,
+    }) =>
+      !hasComposerTraitsTarget({ threadRef, draftId }) ? null : (
+        <TraitsPicker
+          provider="pi"
           models={models}
           {...(threadRef ? { threadRef } : {})}
           {...(draftId ? { draftId } : {})}

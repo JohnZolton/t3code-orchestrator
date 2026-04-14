@@ -82,6 +82,13 @@ export const OpenCodeSettings = Schema.Struct({
 });
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
 
+export const PiSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  binaryPath: makeBinaryPathSetting("pi"),
+  customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
+});
+export type PiSettings = typeof PiSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
@@ -105,6 +112,7 @@ export const ServerSettings = Schema.Struct({
     codex: CodexSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(() => ({}))),
 
@@ -171,6 +179,11 @@ const ModelSelectionPatch = Schema.Union([
     model: Schema.optionalKey(TrimmedNonEmptyString),
     options: Schema.optionalKey(OpenCodeModelOptionsPatch),
   }),
+  Schema.Struct({
+    provider: Schema.optionalKey(Schema.Literal("pi")),
+    model: Schema.optionalKey(TrimmedNonEmptyString),
+    options: Schema.optionalKey(Schema.Struct({})),
+  }),
 ]);
 
 const CodexSettingsPatch = Schema.Struct({
@@ -194,6 +207,12 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(Schema.String),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
@@ -209,6 +228,7 @@ export const ServerSettingsPatch = Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
     }),
   ),
   nostrDm: Schema.optionalKey(NostrDmSettingsPatch),

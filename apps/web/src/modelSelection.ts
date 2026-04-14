@@ -20,6 +20,10 @@ import {
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 
+function providerUsesCustomModels(provider: ProviderKind): boolean {
+  return provider !== "pi";
+}
+
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   title: string;
@@ -55,6 +59,13 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional OpenCode model slugs in `provider/model` format.",
     placeholder: "openai/gpt-5",
     example: "anthropic/claude-sonnet-4-5-20250929",
+  },
+  pi: {
+    provider: "pi",
+    title: "Pi",
+    description: "Save additional Pi model ids for the picker and provider settings.",
+    placeholder: "gpt-5.4",
+    example: "claude-sonnet-4-20250514",
   },
 };
 
@@ -110,18 +121,20 @@ export function getAppModelOptions(
       .map((model) => model.slug),
   );
 
-  const customModels = settings.providers[provider].customModels;
-  for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs, provider)) {
-    if (seen.has(slug)) {
-      continue;
-    }
+  if (providerUsesCustomModels(provider)) {
+    const customModels = settings.providers[provider].customModels;
+    for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs, provider)) {
+      if (seen.has(slug)) {
+        continue;
+      }
 
-    seen.add(slug);
-    options.push({
-      slug,
-      name: slug,
-      isCustom: true,
-    });
+      seen.add(slug);
+      options.push({
+        slug,
+        name: slug,
+        isCustom: true,
+      });
+    }
   }
 
   const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
@@ -181,6 +194,12 @@ export function getCustomModelOptionsByProvider(
       providers,
       "opencode",
       selectedProvider === "opencode" ? selectedModel : undefined,
+    ),
+    pi: getAppModelOptions(
+      settings,
+      providers,
+      "pi",
+      selectedProvider === "pi" ? selectedModel : undefined,
     ),
   };
 }
