@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 import { Encoding } from "effect";
 import { CheckpointRef, ProjectId, type ThreadId } from "@t3tools/contracts";
 
@@ -20,7 +22,7 @@ export function resolveThreadWorkspaceCwd(input: {
   }>;
 }): string | undefined {
   const worktreeCwd = input.thread.worktreePath ?? undefined;
-  if (worktreeCwd) {
+  if (worktreeCwd && existsSync(worktreeCwd)) {
     return worktreeCwd;
   }
 

@@ -16,7 +16,7 @@
 
 import { decode as nip19decode, npubEncode } from "nostr-tools/nip19";
 import { hexToBytes, bytesToHex } from "nostr-tools/utils";
-import { finalizeEvent, getPublicKey, verifyEvent } from "nostr-tools/pure";
+import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
 import {
   encrypt as nip44encrypt,

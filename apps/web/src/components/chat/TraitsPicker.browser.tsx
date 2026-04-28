@@ -8,7 +8,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   OpenCodeModelOptions,
-  ProjectId,
   type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";

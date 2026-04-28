@@ -16,10 +16,9 @@ import {
   type NostrDmStatus,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Ref, Stream } from "effect";
+import { Effect, Layer, Ref, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
 import { NostrDmThreadKeysRepository } from "../../persistence/Services/NostrThreadKeys.ts";
 import type { NostrDmThreadKeyRow } from "../../persistence/Services/NostrThreadKeys.ts";
 import { NostrAllowedPubkeysRepository } from "../../persistence/Services/NostrAllowedPubkeys.ts";
@@ -57,25 +56,9 @@ const MAX_DM_LENGTH = 4000;
 const KEY_POLL_INTERVAL_MS = 10_000;
 const RECONNECT_INTERVAL_MS = 60_000; // Re-establish relay connections every 60s
 
-/** Resolve owner pubkey from env (npub1 or hex). */
-function resolveOwnerPubkey(): string | null {
-  const raw = process.env.AUTH_NPUB ?? "";
-  if (!raw) return null;
-  if (raw.startsWith("npub1")) {
-    try {
-      // Dynamic import would be async, so decode inline with the sync nip19 trick:
-      // npub1 bech32 → 32 bytes → hex. We'll do this at runtime in the async block.
-      return raw; // Return as-is, decode in async context
-    } catch {
-      return null;
-    }
-  }
-  return raw;
-}
 
 const makeNip17Gateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
-  const settingsService = yield* ServerSettingsService;
   const threadKeysRepo = yield* NostrDmThreadKeysRepository;
   const allowedPubkeysRepo = yield* NostrAllowedPubkeysRepository;
   const sql = yield* SqlClient.SqlClient;
@@ -322,15 +305,24 @@ const makeNip17Gateway = Effect.gen(function* () {
             pool
               .publish(relays, gw as any)
               .map((p: Promise<any>) =>
-                Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), PUBLISH_TIMEOUT_MS))]),
+                Promise.race([
+                  p,
+                  new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("timeout")), PUBLISH_TIMEOUT_MS),
+                  ),
+                ]),
               ),
           );
           const succeeded = results.filter((r) => r.status === "fulfilled").length;
           const failed = results.filter((r) => r.status === "rejected").length;
           if (succeeded > 0) {
-            console.log(`[NIP-17 send] published to ${succeeded}/${relays.length} relays (${failed} failed)`);
+            console.log(
+              `[NIP-17 send] published to ${succeeded}/${relays.length} relays (${failed} failed)`,
+            );
           } else {
-            console.warn(`[NIP-17 send] all ${relays.length} relays failed — message may not be delivered`);
+            console.warn(
+              `[NIP-17 send] all ${relays.length} relays failed — message may not be delivered`,
+            );
           }
         }
       }

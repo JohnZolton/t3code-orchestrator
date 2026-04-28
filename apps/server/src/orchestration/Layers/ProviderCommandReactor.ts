@@ -312,6 +312,19 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
+      if (!activeSession) {
+        yield* Effect.logInfo("provider command reactor rehydrating missing provider session", {
+          threadId,
+          projectedStatus: thread.session?.status,
+          currentProvider,
+          desiredProvider: desiredModelSelection.provider,
+          desiredRuntimeMode,
+        });
+        const resumedSession = yield* startProviderSession(undefined);
+        yield* bindSessionToThread(resumedSession);
+        return resumedSession.threadId;
+      }
+
       if (
         !runtimeModeChanged &&
         !providerChanged &&

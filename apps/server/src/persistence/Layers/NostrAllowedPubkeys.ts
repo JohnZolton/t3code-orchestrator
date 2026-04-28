@@ -2,7 +2,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema } from "effect";
 
-import { toPersistenceSqlError, type ProjectionRepositoryError } from "../Errors.ts";
+import { toPersistenceSqlError } from "../Errors.ts";
 import {
   NostrAllowedPubkeyRow,
   NostrAllowedPubkeysRepository,
