@@ -1023,16 +1023,26 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                       ),
                   );
                   pool.close(DEFAULT_RELAYS);
-                  console.log(`[nostr] Published inbox relays for thread ${input.threadId.slice(0, 8)}`);
+                  console.log(
+                    `[nostr] Published inbox relays for thread ${input.threadId.slice(0, 8)}`,
+                  );
                 },
-                catch: (e) => { console.error("[nostr] Failed to publish inbox relays:", e); },
-              }).pipe(Effect.catch((e) => { console.error("[nostr] inbox relay publish effect error:", e); return Effect.void; }));
+                catch: (e) => {
+                  console.error("[nostr] Failed to publish inbox relays:", e);
+                },
+              }).pipe(
+                Effect.catch((e) => {
+                  console.error("[nostr] inbox relay publish effect error:", e);
+                  return Effect.void;
+                }),
+              );
 
               // Always send DM to owner so they can reply to this thread
               // Read owner pubkey from DB (nostr_allowed_pubkeys) instead of env var
-              const allowedRows = yield* sql`SELECT pubkey_hex FROM nostr_allowed_pubkeys LIMIT 1`.pipe(
-                Effect.catch(() => Effect.succeed([] as any[])),
-              );
+              const allowedRows =
+                yield* sql`SELECT pubkey_hex FROM nostr_allowed_pubkeys LIMIT 1`.pipe(
+                  Effect.catch(() => Effect.succeed([] as any[])),
+                );
               const ownerPubkeyHex: string | null =
                 (allowedRows as any[])?.[0]?.pubkey_hex ??
                 (() => {
@@ -1047,11 +1057,12 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                   }
                   return envNpub.length === 64 ? envNpub : null;
                 })();
-              yield* Effect.log(`[nostr] getThreadNpub: ownerPubkeyHex=${ownerPubkeyHex ? ownerPubkeyHex.slice(0, 8) + "..." : "null"}, threadId=${input.threadId.slice(0, 8)}, keyExists=${Option.isSome(existing)}`);
+              yield* Effect.log(
+                `[nostr] getThreadNpub: ownerPubkeyHex=${ownerPubkeyHex ? ownerPubkeyHex.slice(0, 8) + "..." : "null"}, threadId=${input.threadId.slice(0, 8)}, keyExists=${Option.isSome(existing)}`,
+              );
               if (ownerPubkeyHex) {
                 yield* Effect.tryPromise({
                   try: async () => {
-
                     const nip44 = await import("nostr-tools/nip44");
                     const { getConversationKey } = nip44;
                     const nip44encrypt = nip44.encrypt;
@@ -1108,10 +1119,19 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                         ),
                     );
                     pool.close(DEFAULT_RELAYS);
-                    console.log(`[nostr] Sent initial DM for thread ${input.threadId.slice(0, 8)} to owner ${ownerPubkeyHex.slice(0, 8)}...`);
+                    console.log(
+                      `[nostr] Sent initial DM for thread ${input.threadId.slice(0, 8)} to owner ${ownerPubkeyHex.slice(0, 8)}...`,
+                    );
                   },
-                  catch: (e) => { console.error("[nostr] Failed to send initial DM:", e); },
-                }).pipe(Effect.catch((e) => { console.error("[nostr] DM send effect error:", e); return Effect.void; }));
+                  catch: (e) => {
+                    console.error("[nostr] Failed to send initial DM:", e);
+                  },
+                }).pipe(
+                  Effect.catch((e) => {
+                    console.error("[nostr] DM send effect error:", e);
+                    return Effect.void;
+                  }),
+                );
               } else {
                 yield* Effect.log("[nostr] No owner pubkey found — skipping initial DM send");
               }

@@ -4,6 +4,7 @@ import {
   EventId,
   type PiModelOptions,
   type PiThinkingLevel,
+  ProviderItemId,
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeItemId,
@@ -26,6 +27,8 @@ import {
 } from "../Errors.ts";
 import {
   piModelFromState,
+  piModelSelectionNeedsRefresh,
+  piModelSlug,
   probePiRpcModels,
   PiRpcSessionProcess,
   piThreadSessionDir,
@@ -37,8 +40,10 @@ import {
   resolvePiModelTarget,
 } from "../piRuntime.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
+import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "pi" as const;
+const PI_ABORT_TIMEOUT_MS = 2_000;
 
 interface PiTurnSnapshot {
   readonly id: TurnId;
@@ -53,7 +58,13 @@ interface PiPendingUserInput {
 interface PiActiveTurn {
   readonly turnId: TurnId;
   readonly items: Array<unknown>;
-  assistantTextSeen: boolean;
+  assistantSegmentIndex: number;
+  currentAssistantSegmentFinalized: boolean;
+  currentAssistantText: string;
+  lastFinalizedAssistantText: string;
+  readonly currentAssistantItemIds: Set<string>;
+  readonly reasoningContentIndexesSeen: Set<number>;
+  readonly toolCallsWithStreamedOutput: Set<string>;
   completed: boolean;
   lastTurnMessage: PiRpcAgentMessage | undefined;
   lastToolResults: ReadonlyArray<PiRpcAgentMessage> | undefined;
@@ -76,7 +87,10 @@ type MutableProviderSession = {
   -readonly [K in keyof ProviderSession]: ProviderSession[K];
 };
 
-export interface PiAdapterLiveOptions {}
+export interface PiAdapterLiveOptions {
+  readonly nativeEventLogPath?: string;
+  readonly nativeEventLogger?: EventNdjsonLogger;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -140,6 +154,24 @@ function extractTextContent(value: unknown): string {
 
 function extractAssistantText(message: PiRpcAgentMessage | undefined): string {
   return extractTextContent(message?.content).trim();
+}
+
+function extractThinkingContent(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((entry) => extractThinkingContent(entry)).join("");
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as { type?: unknown; thinking?: unknown; content?: unknown };
+  if (record.type === "thinking" && typeof record.thinking === "string") {
+    return record.thinking;
+  }
+  if (typeof record.thinking === "string") {
+    return record.thinking;
+  }
+  return extractThinkingContent(record.content);
 }
 
 function detailFromToolPayload(value: unknown): string | undefined {
@@ -398,16 +430,74 @@ function latestAssistantMessage(
   return undefined;
 }
 
-export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
+function assistantItemId(input: {
+  readonly turnId: TurnId;
+  readonly segmentIndex: number;
+  readonly contentIndex: number;
+}): string {
+  return `assistant:${input.turnId}:${input.segmentIndex}:${input.contentIndex}`;
+}
+
+function piNativeEventItemId(event: PiRpcEvent): ProviderItemId | undefined {
+  switch (event.type) {
+    case "tool_execution_start":
+    case "tool_execution_update":
+    case "tool_execution_end":
+      return typeof event.toolCallId === "string" && event.toolCallId.trim().length > 0
+        ? ProviderItemId.makeUnsafe(event.toolCallId)
+        : undefined;
+    case "extension_ui_request":
+      return event.id.trim().length > 0 ? ProviderItemId.makeUnsafe(event.id) : undefined;
+    default:
+      return undefined;
+  }
+}
+
+export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
   return Layer.effect(
     PiAdapter,
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
+      const nativeEventLogger =
+        options?.nativeEventLogger ??
+        (options?.nativeEventLogPath !== undefined
+          ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, {
+              stream: "native",
+            })
+          : undefined);
       const services = yield* Effect.services();
       const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
       const sessions = new Map<ThreadId, PiSessionContext>();
+
+      const logNativePiEvent = Effect.fn("logNativePiEvent")(function* (
+        context: PiSessionContext,
+        event: PiRpcEvent,
+      ) {
+        if (!nativeEventLogger) {
+          return;
+        }
+
+        const observedAt = new Date().toISOString();
+        yield* nativeEventLogger.write(
+          {
+            observedAt,
+            event: {
+              id: crypto.randomUUID(),
+              kind: "notification",
+              provider: PROVIDER,
+              createdAt: observedAt,
+              method: event.type,
+              threadId: context.session.threadId,
+              ...(context.activeTurn ? { turnId: context.activeTurn.turnId } : {}),
+              ...(piNativeEventItemId(event) ? { itemId: piNativeEventItemId(event) } : {}),
+              payload: event,
+            },
+          },
+          context.session.threadId,
+        );
+      });
 
       const emit = (event: ProviderRuntimeEvent) =>
         Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
@@ -458,6 +548,140 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
         );
       });
 
+      const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
+        context: PiSessionContext,
+        activeTurn: PiActiveTurn,
+        delta: string,
+        contentIndex: number,
+      ) {
+        if (delta.length === 0) {
+          return;
+        }
+        const itemId = assistantItemId({
+          turnId: activeTurn.turnId,
+          segmentIndex: activeTurn.assistantSegmentIndex,
+          contentIndex,
+        });
+        activeTurn.currentAssistantItemIds.add(itemId);
+        activeTurn.currentAssistantSegmentFinalized = false;
+        activeTurn.currentAssistantText += delta;
+        yield* emit({
+          ...buildEventBase({
+            threadId: context.session.threadId,
+            turnId: activeTurn.turnId,
+            itemId,
+          }),
+          type: "content.delta",
+          payload: {
+            streamKind: "assistant_text",
+            delta,
+            contentIndex,
+          },
+        });
+      });
+
+      const emitAssistantSnapshotDelta = Effect.fn("emitAssistantSnapshotDelta")(function* (
+        context: PiSessionContext,
+        activeTurn: PiActiveTurn,
+        message: PiRpcAgentMessage | undefined,
+      ) {
+        const snapshotText = extractAssistantText(message);
+        if (snapshotText.length === 0 || snapshotText === activeTurn.currentAssistantText) {
+          return;
+        }
+
+        if (snapshotText.startsWith(activeTurn.currentAssistantText)) {
+          const delta = snapshotText.slice(activeTurn.currentAssistantText.length);
+          yield* emitAssistantTextDelta(context, activeTurn, delta, 0);
+        }
+      });
+
+      const emitReasoningDelta = Effect.fn("emitReasoningDelta")(function* (
+        context: PiSessionContext,
+        activeTurn: PiActiveTurn,
+        delta: string,
+        contentIndex: number,
+      ) {
+        if (delta.length === 0) {
+          return;
+        }
+        activeTurn.reasoningContentIndexesSeen.add(contentIndex);
+        yield* emit({
+          ...buildEventBase({
+            threadId: context.session.threadId,
+            turnId: activeTurn.turnId,
+            itemId: `reasoning:${activeTurn.turnId}:${contentIndex}`,
+          }),
+          type: "content.delta",
+          payload: {
+            streamKind: "reasoning_text",
+            delta,
+            contentIndex,
+          },
+        });
+      });
+
+      const finalizeAssistantSegment = Effect.fn("finalizeAssistantSegment")(function* (
+        context: PiSessionContext,
+        activeTurn: PiActiveTurn,
+        message: PiRpcAgentMessage | undefined,
+      ) {
+        const fallbackAssistantText = extractAssistantText(message);
+        if (activeTurn.currentAssistantItemIds.size === 0) {
+          if (fallbackAssistantText.length === 0) {
+            return;
+          }
+
+          yield* emit({
+            ...buildEventBase({
+              threadId: context.session.threadId,
+              turnId: activeTurn.turnId,
+              itemId: assistantItemId({
+                turnId: activeTurn.turnId,
+                segmentIndex: activeTurn.assistantSegmentIndex,
+                contentIndex: 0,
+              }),
+            }),
+            type: "item.completed",
+            payload: {
+              itemType: "assistant_message",
+              status: "completed",
+              title: "Assistant message",
+              detail: fallbackAssistantText,
+            },
+          });
+          activeTurn.lastFinalizedAssistantText = fallbackAssistantText;
+          activeTurn.currentAssistantText = "";
+          activeTurn.assistantSegmentIndex += 1;
+          activeTurn.currentAssistantSegmentFinalized = true;
+          return;
+        }
+
+        for (const itemId of activeTurn.currentAssistantItemIds) {
+          yield* emit({
+            ...buildEventBase({
+              threadId: context.session.threadId,
+              turnId: activeTurn.turnId,
+              itemId,
+            }),
+            type: "item.completed",
+            payload: {
+              itemType: "assistant_message",
+              status: "completed",
+              title: "Assistant message",
+            },
+          });
+        }
+        activeTurn.currentAssistantItemIds.clear();
+        activeTurn.lastFinalizedAssistantText =
+          activeTurn.currentAssistantText.length > 0
+            ? activeTurn.currentAssistantText
+            : fallbackAssistantText;
+        activeTurn.currentAssistantText = "";
+        activeTurn.assistantSegmentIndex += 1;
+        activeTurn.currentAssistantSegmentFinalized = true;
+      });
+
       const completeTurn = Effect.fn("completeTurn")(function* (
         context: PiSessionContext,
         input: {
@@ -482,23 +706,7 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
           activeTurn.items.push(item);
         }
 
-        const fallbackAssistantText = extractAssistantText(input.finalMessage);
-        if (!activeTurn.assistantTextSeen && fallbackAssistantText.length > 0) {
-          yield* emit({
-            ...buildEventBase({
-              threadId: context.session.threadId,
-              turnId: activeTurn.turnId,
-              itemId: `assistant:${activeTurn.turnId}:0`,
-            }),
-            type: "item.completed",
-            payload: {
-              itemType: "assistant_message",
-              status: "completed",
-              title: "Assistant message",
-              detail: fallbackAssistantText,
-            },
-          });
-        }
+        yield* finalizeAssistantSegment(context, activeTurn, input.finalMessage);
 
         yield* emit({
           ...buildEventBase({ threadId: context.session.threadId, turnId: activeTurn.turnId }),
@@ -563,6 +771,7 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
 
       const handlePiEvent = (context: PiSessionContext, event: PiRpcEvent) =>
         Effect.gen(function* () {
+          yield* logNativePiEvent(context, event);
           const activeTurn = context.activeTurn;
           if (activeTurn) {
             activeTurn.items.push(event);
@@ -570,54 +779,65 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
 
           switch (event.type) {
             case "message_update": {
-              const assistantMessageEvent = event.assistantMessageEvent;
-              if (!activeTurn || !assistantMessageEvent?.type) {
+              if (!activeTurn) {
                 return;
               }
 
-              if (assistantMessageEvent.type === "text_delta") {
-                const delta = assistantMessageEvent.delta ?? "";
-                if (delta.length === 0) {
-                  return;
-                }
-                activeTurn.assistantTextSeen = true;
+              const assistantMessageEvent = event.assistantMessageEvent;
+              if (assistantMessageEvent?.type === "text_delta") {
                 const contentIndex = assistantMessageEvent.contentIndex ?? 0;
-                yield* emit({
-                  ...buildEventBase({
-                    threadId: context.session.threadId,
-                    turnId: activeTurn.turnId,
-                    itemId: `assistant:${activeTurn.turnId}:${contentIndex}`,
-                  }),
-                  type: "content.delta",
-                  payload: {
-                    streamKind: "assistant_text",
-                    delta,
-                    contentIndex,
-                  },
-                });
+                const snapshotText = extractAssistantText(event.message);
+                if (snapshotText.length > 0) {
+                  if (snapshotText === activeTurn.currentAssistantText) {
+                    return;
+                  }
+                  if (snapshotText.startsWith(activeTurn.currentAssistantText)) {
+                    yield* emitAssistantTextDelta(
+                      context,
+                      activeTurn,
+                      snapshotText.slice(activeTurn.currentAssistantText.length),
+                      contentIndex,
+                    );
+                    return;
+                  }
+                }
+
+                yield* emitAssistantTextDelta(
+                  context,
+                  activeTurn,
+                  assistantMessageEvent.delta ?? "",
+                  contentIndex,
+                );
+                return;
+              }
+
+              yield* emitAssistantSnapshotDelta(context, activeTurn, event.message);
+
+              if (!assistantMessageEvent?.type) {
                 return;
               }
 
               if (assistantMessageEvent.type === "thinking_delta") {
-                const delta = assistantMessageEvent.delta ?? "";
-                if (delta.length === 0) {
-                  return;
+                yield* emitReasoningDelta(
+                  context,
+                  activeTurn,
+                  assistantMessageEvent.delta ?? "",
+                  assistantMessageEvent.contentIndex ?? 0,
+                );
+                return;
+              }
+
+              if (assistantMessageEvent.type === "thinking_end") {
+                const contentIndex = assistantMessageEvent.contentIndex ?? 0;
+                const content = (
+                  assistantMessageEvent.content ?? extractThinkingContent(event.message?.content)
+                ).trim();
+                if (
+                  content.length > 0 &&
+                  !activeTurn.reasoningContentIndexesSeen.has(contentIndex)
+                ) {
+                  yield* emitReasoningDelta(context, activeTurn, content, contentIndex);
                 }
-                yield* emit({
-                  ...buildEventBase({
-                    threadId: context.session.threadId,
-                    turnId: activeTurn.turnId,
-                    itemId: `reasoning:${activeTurn.turnId}:${assistantMessageEvent.contentIndex ?? 0}`,
-                  }),
-                  type: "content.delta",
-                  payload: {
-                    streamKind: "reasoning_text",
-                    delta,
-                    ...(assistantMessageEvent.contentIndex !== undefined
-                      ? { contentIndex: assistantMessageEvent.contentIndex }
-                      : {}),
-                  },
-                });
                 return;
               }
 
@@ -654,6 +874,7 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
               if (!activeTurn) {
                 return;
               }
+              yield* finalizeAssistantSegment(context, activeTurn, undefined);
               const itemType = classifyToolItemType(event.toolName);
               yield* emit({
                 ...buildEventBase({
@@ -683,6 +904,10 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
                 return;
               }
               const itemType = classifyToolItemType(event.toolName);
+              const detail = detailFromToolPayload(event.partialResult);
+              if (event.toolCallId && detail) {
+                activeTurn.toolCallsWithStreamedOutput.add(event.toolCallId);
+              }
               yield* emit({
                 ...buildEventBase({
                   threadId: context.session.threadId,
@@ -694,9 +919,7 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
                   itemType,
                   status: "inProgress",
                   title: titleForTool(itemType),
-                  ...(detailFromToolPayload(event.partialResult)
-                    ? { detail: detailFromToolPayload(event.partialResult) }
-                    : {}),
+                  ...(detail ? { detail } : {}),
                   data: {
                     toolName: event.toolName,
                     args: event.args,
@@ -712,6 +935,10 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
                 return;
               }
               const itemType = classifyToolItemType(event.toolName);
+              const detail = detailFromToolPayload(event.result);
+              const streamedOutputAlreadyShown =
+                typeof event.toolCallId === "string" &&
+                activeTurn.toolCallsWithStreamedOutput.has(event.toolCallId);
               yield* emit({
                 ...buildEventBase({
                   threadId: context.session.threadId,
@@ -723,9 +950,7 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
                   itemType,
                   status: event.isError ? "failed" : "completed",
                   title: titleForTool(itemType),
-                  ...(detailFromToolPayload(event.result)
-                    ? { detail: detailFromToolPayload(event.result) }
-                    : {}),
+                  ...(detail && !streamedOutputAlreadyShown ? { detail } : {}),
                   data: {
                     toolName: event.toolName,
                     result: event.result,
@@ -742,6 +967,37 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
               }
               activeTurn.lastTurnMessage = event.message;
               activeTurn.lastToolResults = event.toolResults;
+              if (event.message?.stopReason === "toolUse") {
+                const fallbackAssistantText = extractAssistantText(event.message);
+                const shouldFinalizeFallbackOnly =
+                  fallbackAssistantText.length > 0 &&
+                  fallbackAssistantText !== activeTurn.lastFinalizedAssistantText;
+                if (
+                  shouldFinalizeFallbackOnly ||
+                  !activeTurn.currentAssistantSegmentFinalized ||
+                  activeTurn.currentAssistantItemIds.size > 0
+                ) {
+                  yield* finalizeAssistantSegment(context, activeTurn, event.message);
+                }
+                return;
+              }
+
+              const stopReason = event.message?.stopReason;
+              if (stopReason) {
+                const state = stopReasonToTurnState(stopReason);
+                yield* completeTurn(context, {
+                  state,
+                  stopReason,
+                  ...(event.message?.usage !== undefined ? { usage: event.message.usage } : {}),
+                  ...(state === "failed"
+                    ? {
+                        errorMessage: extractAssistantText(event.message) || "Pi turn failed.",
+                      }
+                    : {}),
+                  finalMessage: event.message,
+                  finalItems: event.toolResults,
+                });
+              }
               return;
             }
 
@@ -750,7 +1006,10 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
                 return;
               }
               const finalMessage =
-                activeTurn.lastTurnMessage ?? latestAssistantMessage(event.messages);
+                latestAssistantMessage(event.messages) ??
+                (activeTurn.lastTurnMessage?.stopReason === "toolUse"
+                  ? undefined
+                  : activeTurn.lastTurnMessage);
               const stopReason = finalMessage?.stopReason;
               const state = stopReasonToTurnState(stopReason);
               yield* completeTurn(context, {
@@ -963,6 +1222,27 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
             input.modelSelection?.provider === PROVIDER &&
             piModelFromState(state) !== input.modelSelection.model
           ) {
+            if (
+              piModelSelectionNeedsRefresh({
+                requestedModel: input.modelSelection.model,
+                availableModels,
+              })
+            ) {
+              availableModels = yield* Effect.tryPromise({
+                try: () => probePiRpcModels({ binaryPath: settings.binaryPath, cwd }),
+                catch: (cause) =>
+                  new ProviderAdapterProcessError({
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    detail:
+                      cause instanceof Error
+                        ? cause.message
+                        : "Failed to probe Pi providers for model resolution.",
+                    cause,
+                  }),
+              });
+            }
+
             let target = resolvePiModelTarget({
               requestedModel: input.modelSelection.model,
               availableModels,
@@ -1159,6 +1439,27 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
             ),
           );
 
+          if (
+            piModelSelectionNeedsRefresh({
+              requestedModel: input.modelSelection.model,
+              availableModels: context.availableModels,
+            })
+          ) {
+            context.availableModels = yield* Effect.tryPromise({
+              try: () => probePiRpcModels({ binaryPath: settings.binaryPath, cwd: context.cwd }),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "get_available_models",
+                  detail:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Failed to probe Pi providers for model resolution.",
+                  cause,
+                }),
+            });
+          }
+
           let target = resolvePiModelTarget({
             requestedModel: input.modelSelection.model,
             availableModels: context.availableModels,
@@ -1200,7 +1501,7 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
               }),
           });
           context.session = updateProviderSession(context, {
-            model: model?.id ?? input.modelSelection.model,
+            model: piModelSlug(model) ?? input.modelSelection.model,
           });
         }
 
@@ -1226,7 +1527,13 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
         context.activeTurn = {
           turnId,
           items: [],
-          assistantTextSeen: false,
+          assistantSegmentIndex: 0,
+          currentAssistantSegmentFinalized: true,
+          currentAssistantText: "",
+          lastFinalizedAssistantText: "",
+          currentAssistantItemIds: new Set(),
+          reasoningContentIndexesSeen: new Set(),
+          toolCallsWithStreamedOutput: new Set(),
           completed: false,
           lastTurnMessage: undefined,
           lastToolResults: undefined,
@@ -1288,21 +1595,37 @@ export function makePiAdapterLive(_options?: PiAdapterLiveOptions) {
       const interruptTurn: PiAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
         function* (threadId) {
           const context = ensureSessionContext(sessions, threadId);
-          yield* Effect.tryPromise({
-            try: () => context.process.abort(),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "abort",
-                detail: cause instanceof Error ? cause.message : "Failed to abort Pi turn.",
-                cause,
-              }),
-          });
+          const abortExit = yield* Effect.exit(
+            Effect.tryPromise({
+              try: () => context.process.abort(PI_ABORT_TIMEOUT_MS),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "abort",
+                  detail: cause instanceof Error ? cause.message : "Failed to abort Pi turn.",
+                  cause,
+                }),
+            }),
+          );
           if (context.activeTurn && !context.activeTurn.completed) {
             yield* completeTurn(context, {
               state: "interrupted",
               stopReason: "aborted",
               errorMessage: "Interrupted by user.",
+            });
+          }
+          if (abortExit._tag === "Failure") {
+            yield* emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId: context.activeTurn?.turnId,
+              }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi abort did not acknowledge before timeout; marking turn interrupted locally.",
+                detail: Cause.pretty(abortExit.cause),
+              },
             });
           }
         },

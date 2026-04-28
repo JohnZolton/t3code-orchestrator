@@ -21,6 +21,7 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import { sanitizeActivityPayload } from "../activityPayloadSanitizer.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -432,65 +433,72 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "tool",
-          kind: "tool.updated",
-          summary: event.payload.title ?? "Tool updated",
-          payload: {
-            itemType: event.payload.itemType,
-            ...(event.payload.status ? { status: event.payload.status } : {}),
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
-      ];
+      const payload = sanitizeActivityPayload("tool.updated", {
+        ...(event.itemId ? { itemId: event.itemId } : {}),
+        itemType: event.payload.itemType,
+        ...(event.payload.status ? { status: event.payload.status } : {}),
+        ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+        ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+      });
+      const activity: OrchestrationThreadActivity = {
+        id: event.eventId,
+        createdAt: event.createdAt,
+        tone: "tool",
+        kind: "tool.updated",
+        summary: event.payload.title ?? "Tool updated",
+        payload,
+        turnId: toTurnId(event.turnId) ?? null,
+        ...maybeSequence,
+      };
+      return [activity];
     }
 
     case "item.completed": {
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "tool",
-          kind: "tool.completed",
-          summary: event.payload.title ?? "Tool",
-          payload: {
-            itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-          },
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
-      ];
+      const payload = sanitizeActivityPayload("tool.completed", {
+        ...(event.itemId ? { itemId: event.itemId } : {}),
+        itemType: event.payload.itemType,
+        ...(event.payload.status ? { status: event.payload.status } : {}),
+        ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+        ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+      });
+      const activity: OrchestrationThreadActivity = {
+        id: event.eventId,
+        createdAt: event.createdAt,
+        tone: "tool",
+        kind: "tool.completed",
+        summary: event.payload.title ?? "Tool",
+        payload,
+        turnId: toTurnId(event.turnId) ?? null,
+        ...maybeSequence,
+      };
+      return [activity];
     }
 
     case "item.started": {
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "tool",
-          kind: "tool.started",
-          summary: `${event.payload.title ?? "Tool"} started`,
-          payload: {
-            itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-          },
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
-      ];
+      const payload = sanitizeActivityPayload("tool.started", {
+        ...(event.itemId ? { itemId: event.itemId } : {}),
+        itemType: event.payload.itemType,
+        ...(event.payload.status ? { status: event.payload.status } : {}),
+        ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+        ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+      });
+      const activity: OrchestrationThreadActivity = {
+        id: event.eventId,
+        createdAt: event.createdAt,
+        tone: "tool",
+        kind: "tool.started",
+        summary: `${event.payload.title ?? "Tool"} started`,
+        payload,
+        turnId: toTurnId(event.turnId) ?? null,
+        ...maybeSequence,
+      };
+      return [activity];
     }
 
     default:

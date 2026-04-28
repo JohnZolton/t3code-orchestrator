@@ -1972,8 +1972,10 @@ describe("ProviderRuntimeIngestion", () => {
         ? (toolUpdate.payload as Record<string, unknown>)
         : undefined;
     expect(toolUpdate?.kind).toBe("tool.updated");
+    expect(toolUpdatePayload?.itemId).toBe("item-p1-tool");
     expect(toolUpdatePayload?.itemType).toBe("command_execution");
     expect(toolUpdatePayload?.status).toBe("in_progress");
+    expect(toolUpdatePayload?.data).toEqual({ pid: 123 });
 
     const warning = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-runtime-warning",
@@ -1991,6 +1993,102 @@ describe("ProviderRuntimeIngestion", () => {
     expect(checkpoint?.status).toBe("missing");
     expect(checkpoint?.assistantMessageId).toBe("assistant:item-p1-assistant");
     expect(checkpoint?.checkpointRef).toBe("provider-diff:evt-turn-diff-updated");
+  });
+
+  it("preserves tool item ids and data on completed tool lifecycle activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-item-completed-tool-payload"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tool-payload"),
+      itemId: asItemId("item-tool-payload"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Command run",
+        data: {
+          toolName: "bash",
+          result: { content: [{ type: "text", text: "ok\n" }] },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-item-completed-tool-payload",
+      ),
+    );
+
+    const completed = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-item-completed-tool-payload",
+    );
+    const completedPayload =
+      completed?.payload && typeof completed.payload === "object"
+        ? (completed.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(completed?.kind).toBe("tool.completed");
+    expect(completedPayload?.itemId).toBe("item-tool-payload");
+    expect(completedPayload?.status).toBe("completed");
+    expect(completedPayload?.data).toEqual({
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "ok\n" }] },
+    });
+  });
+
+  it("truncates oversized tool lifecycle payload data before projecting activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const oversizedText = "x".repeat(2_000);
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-item-updated-oversized"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tool-oversized"),
+      itemId: asItemId("item-tool-oversized"),
+      payload: {
+        itemType: "command_execution",
+        status: "in_progress",
+        title: "Run lint",
+        data: {
+          args: { command: ["bun", "run", "lint"] },
+          result: { content: [{ type: "text", text: oversizedText }] },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-item-updated-oversized",
+      ),
+    );
+
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-item-updated-oversized",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+    const data = payload?.data as
+      | {
+          args?: { command?: string[] };
+          result?: { content?: Array<{ text?: string }> };
+        }
+      | undefined;
+
+    expect(data?.args?.command).toEqual(["bun", "run", "lint"]);
+    expect(data?.result?.content?.[0]?.text?.length).toBeLessThan(oversizedText.length);
+    expect(data?.result?.content?.[0]?.text?.endsWith("...")).toBe(true);
   });
 
   it("projects context window updates into normalized thread activities", async () => {

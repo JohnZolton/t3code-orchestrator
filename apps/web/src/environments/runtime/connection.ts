@@ -196,7 +196,9 @@ export function createEnvironmentConnection(
     try {
       console.log(`[bootstrap] Loading snapshot for ${environmentId} (reason=${reason})...`);
       const snapshot = await input.client.orchestration.getSnapshot();
-      console.log(`[bootstrap] Snapshot loaded: seq=${snapshot.snapshotSequence}, threads=${snapshot.threads?.length ?? 0}, projects=${snapshot.projects?.length ?? 0}`);
+      console.log(
+        `[bootstrap] Snapshot loaded: seq=${snapshot.snapshotSequence}, threads=${snapshot.threads?.length ?? 0}, projects=${snapshot.projects?.length ?? 0}`,
+      );
       if (!disposed) {
         input.syncSnapshot(snapshot, environmentId);
         const needsReplay = recovery.completeSnapshotRecovery(snapshot.snapshotSequence);
@@ -204,8 +206,11 @@ export function createEnvironmentConnection(
         // The snapshot is authoritative for everything up to snapshotSequence,
         // so deferred events within that range don't need a replay.
         const recoveryState = recovery.getState();
-        const actuallyNeedsReplay = needsReplay && recoveryState.highestObservedSequence > snapshot.snapshotSequence;
-        console.log(`[bootstrap] Bootstrap complete. bootstrapped=${recoveryState.bootstrapped}, needsReplay=${needsReplay}, actuallyNeedsReplay=${actuallyNeedsReplay}, highestObserved=${recoveryState.highestObservedSequence}, snapshotSeq=${snapshot.snapshotSequence}`);
+        const actuallyNeedsReplay =
+          needsReplay && recoveryState.highestObservedSequence > snapshot.snapshotSequence;
+        console.log(
+          `[bootstrap] Bootstrap complete. bootstrapped=${recoveryState.bootstrapped}, needsReplay=${needsReplay}, actuallyNeedsReplay=${actuallyNeedsReplay}, highestObserved=${recoveryState.highestObservedSequence}, snapshotSeq=${snapshot.snapshotSequence}`,
+        );
         if (actuallyNeedsReplay) {
           void runReplayRecovery("sequence-gap");
         }
@@ -263,7 +268,9 @@ export function createEnvironmentConnection(
         void runReplayRecovery("sequence-gap");
       }
       if (action === "defer") {
-        console.warn(`[orch-event] DEFERRED seq=${event.sequence} type=${event.type} (recovery in-flight or not bootstrapped)`);
+        console.warn(
+          `[orch-event] DEFERRED seq=${event.sequence} type=${event.type} (recovery in-flight or not bootstrapped)`,
+        );
       }
     },
     {

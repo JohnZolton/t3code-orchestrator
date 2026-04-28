@@ -4,6 +4,9 @@ import {
   EMPTY_PI_MODEL_CAPABILITIES,
   PI_REASONING_MODEL_CAPABILITIES,
   parsePiDotEnv,
+  piModelFromState,
+  piModelSelectionNeedsRefresh,
+  piModelSlug,
   resolvePiModelTarget,
 } from "./piRuntime.ts";
 
@@ -44,12 +47,96 @@ describe("Pi reasoning capabilities", () => {
   });
 });
 
+describe("piModelSelectionNeedsRefresh", () => {
+  it("requests a refresh for provider-qualified models missing from the current inventory", () => {
+    expect(
+      piModelSelectionNeedsRefresh({
+        requestedModel: "openai/claude-opus-4-7",
+        availableModels: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("requests a refresh for bare Pi model ids when the current inventory is empty", () => {
+    expect(
+      piModelSelectionNeedsRefresh({
+        requestedModel: "claude-opus-4-7",
+        availableModels: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("skips the refresh when the unqualified model id is already known", () => {
+    expect(
+      piModelSelectionNeedsRefresh({
+        requestedModel: "openai/claude-opus-4-7",
+        availableModels: [{ id: "claude-opus-4-7", provider: "anthropic" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("piModelSlug", () => {
+  it("returns canonical provider-qualified slugs for Pi models", () => {
+    expect(piModelSlug({ id: "claude-opus-4-7", provider: "anthropic" })).toBe(
+      "anthropic/claude-opus-4-7",
+    );
+    expect(piModelSlug({ id: "gpt-5.4" })).toBe("gpt-5.4");
+  });
+});
+
+describe("piModelFromState", () => {
+  it("returns canonical provider-qualified slugs from Pi session state", () => {
+    expect(
+      piModelFromState({
+        model: { id: "claude-opus-4-7", provider: "anthropic" },
+      }),
+    ).toBe("anthropic/claude-opus-4-7");
+  });
+});
+
 describe("resolvePiModelTarget", () => {
   it("resolves provider/model inputs directly", () => {
     expect(
       resolvePiModelTarget({
         requestedModel: "openai/gpt-5.4",
         availableModels: [],
+      }),
+    ).toEqual({
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+  });
+
+  it("prefers the discovered provider when a prefixed slug uses the wrong provider", () => {
+    expect(
+      resolvePiModelTarget({
+        requestedModel: "openai/claude-opus-4-7",
+        availableModels: [{ id: "claude-opus-4-7", provider: "anthropic" }],
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+    });
+  });
+
+  it("resolves canonical Pi provider-qualified slugs directly", () => {
+    expect(
+      resolvePiModelTarget({
+        requestedModel: "anthropic/claude-opus-4-7",
+        availableModels: [{ id: "claude-opus-4-7", provider: "anthropic" }],
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+    });
+  });
+
+  it("keeps the prefixed provider when the exact provider-qualified model exists", () => {
+    expect(
+      resolvePiModelTarget({
+        requestedModel: "openai/gpt-5.4",
+        availableModels: [{ id: "gpt-5.4", provider: "openai" }],
       }),
     ).toEqual({
       provider: "openai",

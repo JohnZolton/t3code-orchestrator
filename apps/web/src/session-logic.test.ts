@@ -548,14 +548,8 @@ describe("findSidebarProposedPlan", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
-  it("omits tool started entries and keeps completed entries", () => {
+  it("shows tool started entries when no later lifecycle row replaces them", () => {
     const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tool-complete",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        summary: "Tool call complete",
-        kind: "tool.completed",
-      }),
       makeActivity({
         id: "tool-start",
         createdAt: "2026-02-23T00:00:02.000Z",
@@ -565,7 +559,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
   it("omits task start and completion lifecycle entries", () => {
@@ -782,6 +776,33 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
+  it("extracts command text from Pi-style tool args when command metadata is nested under data.args", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-pi-args",
+        kind: "tool.updated",
+        summary: "Command run",
+        payload: {
+          itemType: "command_execution",
+          title: "Command run",
+          itemId: "tool-1",
+          data: {
+            toolName: "bash",
+            args: {
+              command: 'echo "Hello from bash!"',
+            },
+            partialResult: {
+              content: [],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.command).toBe('echo "Hello from bash!"');
+  });
+
   it("does not unwrap shell commands when no wrapper flag is present", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -971,6 +992,135 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
 
     expect(entries.map((entry) => entry.id)).toEqual(["tool-1-complete", "tool-2-complete"]);
+  });
+
+  it("collapses interleaved lifecycle rows for the same tool item id into one entry", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-echo-start",
+        createdAt: "2026-02-23T00:00:00.500Z",
+        kind: "tool.started",
+        summary: "Command run started",
+        payload: {
+          itemId: "tool-echo",
+          itemType: "command_execution",
+          title: "Command run",
+          data: {
+            toolName: "bash",
+            args: { command: 'echo "Hello from bash!"' },
+          },
+        },
+      }),
+      makeActivity({
+        id: "tool-echo-update-empty",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Command run",
+        payload: {
+          itemId: "tool-echo",
+          itemType: "command_execution",
+          title: "Command run",
+          data: {
+            toolName: "bash",
+            args: { command: 'echo "Hello from bash!"' },
+            partialResult: { content: [] },
+          },
+        },
+      }),
+      makeActivity({
+        id: "tool-date-update-empty",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Command run",
+        payload: {
+          itemId: "tool-date",
+          itemType: "command_execution",
+          title: "Command run",
+          data: {
+            toolName: "bash",
+            args: { command: "date" },
+            partialResult: { content: [] },
+          },
+        },
+      }),
+      makeActivity({
+        id: "tool-echo-update-output",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.updated",
+        summary: "Command run",
+        payload: {
+          itemId: "tool-echo",
+          itemType: "command_execution",
+          title: "Command run",
+          detail: "Hello from bash!",
+          data: {
+            toolName: "bash",
+            args: { command: 'echo "Hello from bash!"' },
+            partialResult: {
+              content: [{ type: "text", text: "Hello from bash!\n" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "tool-echo-complete-empty",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "tool.completed",
+        summary: "Command run",
+        payload: {
+          itemId: "tool-echo",
+          itemType: "command_execution",
+          title: "Command run",
+          data: {
+            toolName: "bash",
+            result: { content: [{ type: "text", text: "Hello from bash!\n" }] },
+          },
+        },
+      }),
+      makeActivity({
+        id: "tool-date-update-output",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "tool.updated",
+        summary: "Command run",
+        payload: {
+          itemId: "tool-date",
+          itemType: "command_execution",
+          title: "Command run",
+          detail: "Wed Apr 15 10:23:10 EDT 2026",
+          data: {
+            toolName: "bash",
+            args: { command: "date" },
+            partialResult: {
+              content: [{ type: "text", text: "Wed Apr 15 10:23:10 EDT 2026\n" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "tool-date-complete-empty",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "tool.completed",
+        summary: "Command run",
+        payload: {
+          itemId: "tool-date",
+          itemType: "command_execution",
+          title: "Command run",
+          data: {
+            toolName: "bash",
+            result: { content: [{ type: "text", text: "Wed Apr 15 10:23:10 EDT 2026\n" }] },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.command)).toEqual(['echo "Hello from bash!"', "date"]);
+    expect(entries.map((entry) => entry.detail)).toEqual([
+      "Hello from bash!",
+      "Wed Apr 15 10:23:10 EDT 2026",
+    ]);
   });
 
   it("collapses same-timestamp lifecycle rows even when completed sorts before updated by id", () => {
@@ -1256,17 +1406,31 @@ describe("deriveActiveWorkStartedAt", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("advertises Claude as available while keeping Cursor as a placeholder", () => {
+  it("advertises the available built-in providers while keeping Cursor as a placeholder", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
+    const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
+    const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
+      { value: "opencode", label: "OpenCode", available: true },
+      { value: "pi", label: "Pi", available: true },
       { value: "cursor", label: "Cursor", available: false },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
       label: "Claude",
+      available: true,
+    });
+    expect(opencode).toEqual({
+      value: "opencode",
+      label: "OpenCode",
+      available: true,
+    });
+    expect(pi).toEqual({
+      value: "pi",
+      label: "Pi",
       available: true,
     });
     expect(cursor).toEqual({

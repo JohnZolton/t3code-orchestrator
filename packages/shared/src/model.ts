@@ -223,6 +223,19 @@ export function resolveSelectableModel(
     return byName.slug;
   }
 
+  if (provider === "pi") {
+    const slashIndex = trimmed.indexOf("/");
+    if (slashIndex > 0 && slashIndex < trimmed.length - 1) {
+      const modelId = trimmed.slice(slashIndex + 1);
+      const suffixMatches = options.filter(
+        (option) => option.slug === modelId || option.slug.endsWith(`/${modelId}`),
+      );
+      if (suffixMatches.length === 1) {
+        return suffixMatches[0]!.slug;
+      }
+    }
+  }
+
   const normalized = normalizeModelSlug(trimmed, provider);
   if (!normalized) {
     return null;

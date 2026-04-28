@@ -351,7 +351,9 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${iconSource} --out ${iconPngPath}`,
     );
 
-    yield* generateMacIconSet(iconSource, iconIcnsPath, tmpRoot, path, verbose);
+    if (!(yield* fs.exists(iconIcnsPath))) {
+      yield* generateMacIconSet(iconSource, iconIcnsPath, tmpRoot, path, verbose);
+    }
   });
 }
 

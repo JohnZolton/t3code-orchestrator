@@ -138,11 +138,13 @@ export function getAppModelOptions(
   }
 
   const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
+  const resolvedSelectedModel = resolveSelectableModel(provider, selectedModel, options);
   const selectedModelMatchesExistingName =
     typeof trimmedSelectedModel === "string" &&
     options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);
   if (
     normalizedSelectedModel &&
+    !resolvedSelectedModel &&
     !seen.has(normalizedSelectedModel) &&
     !selectedModelMatchesExistingName
   ) {

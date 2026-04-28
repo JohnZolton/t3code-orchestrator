@@ -39,6 +39,7 @@ import { ProjectionThreadProposedPlan } from "../../persistence/Services/Project
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIdentityResolver.ts";
+import { sanitizeActivityPayload } from "../activityPayloadSanitizer.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
@@ -586,7 +587,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   tone: row.tone,
                   kind: row.kind,
                   summary: row.summary,
-                  payload: row.payload,
+                  payload: sanitizeActivityPayload(row.kind, row.payload),
                   turnId: row.turnId,
                   ...(row.sequence !== null ? { sequence: row.sequence } : {}),
                   createdAt: row.createdAt,

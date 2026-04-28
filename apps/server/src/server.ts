@@ -173,7 +173,7 @@ const ProviderLayerLive = Layer.unwrap(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
     const openCodeAdapterLayer = makeOpenCodeAdapterLive();
-    const piAdapterLayer = makePiAdapterLive();
+    const piAdapterLayer = makePiAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined);
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),

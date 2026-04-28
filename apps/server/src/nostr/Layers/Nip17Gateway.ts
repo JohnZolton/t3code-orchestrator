@@ -56,7 +56,6 @@ const MAX_DM_LENGTH = 4000;
 const KEY_POLL_INTERVAL_MS = 10_000;
 const RECONNECT_INTERVAL_MS = 60_000; // Re-establish relay connections every 60s
 
-
 const makeNip17Gateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const threadKeysRepo = yield* NostrDmThreadKeysRepository;

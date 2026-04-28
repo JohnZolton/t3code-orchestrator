@@ -6,7 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import type { ModelCapabilities, PiThinkingLevel, ServerProviderModel } from "@t3tools/contracts";
 
-const DEFAULT_PI_RPC_TIMEOUT_MS = 5_000;
+const DEFAULT_PI_RPC_TIMEOUT_MS = 45_000;
 const PI_RPC_MODE_ARGS = ["--mode", "rpc"] as const;
 const PI_RPC_PROBE_ARGS = ["--mode", "rpc", "--no-session"] as const;
 const PI_GET_AVAILABLE_MODELS_ID = "pi-probe-models";
@@ -262,6 +262,15 @@ function normalizePiModelName(value: unknown): string | null {
   return normalizePiPlaceholder(value);
 }
 
+export function piModelSlug(model: PiRpcModel | null | undefined): string | undefined {
+  const modelId = normalizePiModelId(model?.id);
+  if (!modelId) {
+    return undefined;
+  }
+  const provider = normalizePiProvider(model?.provider);
+  return provider ? `${provider}/${modelId}` : modelId;
+}
+
 function toPiProviderModels(value: unknown): ReadonlyArray<ServerProviderModel> {
   if (!Array.isArray(value)) {
     return [];
@@ -273,7 +282,7 @@ function toPiProviderModels(value: unknown): ReadonlyArray<ServerProviderModel> 
     if (!isRecord(entry)) {
       continue;
     }
-    const slug = normalizePiModelId(entry.id);
+    const slug = piModelSlug(entry as PiRpcModel);
     if (!slug || seen.has(slug)) {
       continue;
     }
@@ -838,6 +847,28 @@ export function piThreadSessionDir(input: {
   return join(input.stateDir, "provider-sessions", "pi", threadSegment);
 }
 
+export function piModelSelectionNeedsRefresh(input: {
+  readonly requestedModel: string;
+  readonly availableModels: ReadonlyArray<PiRpcModel>;
+}): boolean {
+  const requested = input.requestedModel.trim();
+  if (requested.length === 0) {
+    return false;
+  }
+
+  const slashIndex = requested.indexOf("/");
+  const requestedModelId =
+    slashIndex > 0 && slashIndex < requested.length - 1
+      ? requested.slice(slashIndex + 1)
+      : requested;
+
+  if (input.availableModels.some((model) => trimNonEmpty(model.id) === requestedModelId)) {
+    return false;
+  }
+
+  return input.availableModels.length === 0 || slashIndex > 0;
+}
+
 export function resolvePiModelTarget(input: {
   readonly requestedModel: string;
   readonly availableModels: ReadonlyArray<PiRpcModel>;
@@ -848,15 +879,60 @@ export function resolvePiModelTarget(input: {
     return null;
   }
 
-  const slashIndex = requested.indexOf("/");
-  if (slashIndex > 0 && slashIndex < requested.length - 1) {
+  const canonicalMatch = input.availableModels.find((model) => piModelSlug(model) === requested);
+  const canonicalProvider = normalizePiProvider(canonicalMatch?.provider);
+  const canonicalModelId = normalizePiModelId(canonicalMatch?.id);
+  if (canonicalProvider && canonicalModelId) {
     return {
-      provider: requested.slice(0, slashIndex),
-      modelId: requested.slice(slashIndex + 1),
+      provider: canonicalProvider,
+      modelId: canonicalModelId,
     };
   }
 
   const exactMatch = input.availableModels.find((model) => trimNonEmpty(model.id) === requested);
+  const exactProvider = normalizePiProvider(exactMatch?.provider);
+  if (exactProvider) {
+    return {
+      provider: exactProvider,
+      modelId: requested,
+    };
+  }
+
+  const slashIndex = requested.indexOf("/");
+  if (slashIndex > 0 && slashIndex < requested.length - 1) {
+    const requestedProvider = normalizePiProvider(requested.slice(0, slashIndex));
+    const requestedModelId = requested.slice(slashIndex + 1);
+    const providerQualifiedMatch = input.availableModels.find(
+      (model) =>
+        normalizePiProvider(model.provider) === requestedProvider &&
+        trimNonEmpty(model.id) === requestedModelId,
+    );
+    if (providerQualifiedMatch && requestedProvider) {
+      return {
+        provider: requestedProvider,
+        modelId: requestedModelId,
+      };
+    }
+
+    const unqualifiedMatch = input.availableModels.find(
+      (model) => trimNonEmpty(model.id) === requestedModelId,
+    );
+    const unqualifiedProvider = normalizePiProvider(unqualifiedMatch?.provider);
+    if (unqualifiedProvider) {
+      return {
+        provider: unqualifiedProvider,
+        modelId: requestedModelId,
+      };
+    }
+
+    if (requestedProvider) {
+      return {
+        provider: requestedProvider,
+        modelId: requestedModelId,
+      };
+    }
+  }
+
   const provider = normalizePiProvider(exactMatch?.provider);
   if (provider) {
     return {
@@ -891,8 +967,7 @@ export function resolvePiModelTarget(input: {
 }
 
 export function piModelFromState(state: PiRpcState | null | undefined): string | undefined {
-  const model = state?.model;
-  return trimNonEmpty(model?.id) ?? undefined;
+  return piModelSlug(state?.model);
 }
 
 export async function probePiRpcModels(input: {

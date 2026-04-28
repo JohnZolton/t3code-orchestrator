@@ -85,6 +85,14 @@ describe("resolveSelectableModel", () => {
     expect(resolveSelectableModel("codex", "gpt-5.3 codex", options)).toBe("gpt-5.3-codex");
     expect(resolveSelectableModel("claudeAgent", "sonnet", options)).toBe("claude-sonnet-4-6");
   });
+
+  it("maps stale Pi provider-qualified slugs onto the canonical Pi model option", () => {
+    expect(
+      resolveSelectableModel("pi", "openai/claude-opus-4-7", [
+        { slug: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" },
+      ]),
+    ).toBe("anthropic/claude-opus-4-7");
+  });
 });
 
 describe("capability helpers", () => {

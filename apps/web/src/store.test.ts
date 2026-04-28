@@ -872,6 +872,65 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(next)[0]?.messages).toHaveLength(1);
   });
 
+  it("keeps an interrupted turn stopped when a stale running session update arrives for the same turn", () => {
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const thread = makeThread({
+      session: {
+        provider: "codex",
+        status: "running",
+        orchestrationStatus: "running",
+        activeTurnId: turnId,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      },
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:00.000Z",
+        startedAt: "2026-02-27T00:00:00.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+
+    const interrupted = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.turn-interrupt-requested", {
+        threadId: thread.id,
+        turnId,
+        createdAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    const next = applyOrchestrationEvent(
+      interrupted,
+      makeEvent("thread.session-set", {
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.session).toMatchObject({
+      status: "ready",
+      orchestrationStatus: "interrupted",
+      activeTurnId: undefined,
+    });
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
+      turnId,
+      state: "interrupted",
+    });
+  });
+
   it("does not regress latestTurn when an older turn diff completes late", () => {
     const state = makeState(
       makeThread({

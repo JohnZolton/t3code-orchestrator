@@ -51,6 +51,7 @@ export interface WorkLogEntry {
 interface DerivedWorkLogEntry extends WorkLogEntry {
   activityKind: OrchestrationThreadActivity["kind"];
   collapseKey?: string;
+  toolItemId?: string;
 }
 
 export interface PendingApproval {
@@ -465,7 +466,6 @@ export function deriveWorkLogEntries(
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries = ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter((activity) => activity.kind !== "tool.started")
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.kind !== "context-window.updated")
     .filter((activity) => activity.summary !== "Checkpoint captured")
@@ -496,6 +496,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const commandPreview = extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
+  const toolItemId = asTrimmedString(payload?.itemId);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
@@ -533,6 +534,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
+  if (toolItemId) {
+    entry.toolItemId = toolItemId;
+  }
   return entry;
 }
 
@@ -540,29 +544,64 @@ function collapseDerivedWorkLogEntries(
   entries: ReadonlyArray<DerivedWorkLogEntry>,
 ): DerivedWorkLogEntry[] {
   const collapsed: DerivedWorkLogEntry[] = [];
+  const openToolEntryIndexByItemId = new Map<string, number>();
+
   for (const entry of entries) {
+    const toolItemId = entry.toolItemId;
+    if (toolItemId) {
+      const existingIndex = openToolEntryIndexByItemId.get(toolItemId);
+      if (existingIndex !== undefined) {
+        const previous = collapsed[existingIndex];
+        if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
+          collapsed[existingIndex] = mergeDerivedWorkLogEntries(previous, entry);
+          if (entry.activityKind === "tool.completed") {
+            openToolEntryIndexByItemId.delete(toolItemId);
+          }
+          continue;
+        }
+      }
+    }
+
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      if (entry.toolItemId) {
+        openToolEntryIndexByItemId.set(entry.toolItemId, collapsed.length - 1);
+        if (entry.activityKind === "tool.completed") {
+          openToolEntryIndexByItemId.delete(entry.toolItemId);
+        }
+      }
       continue;
     }
+
     collapsed.push(entry);
+    if (toolItemId && entry.activityKind !== "tool.completed") {
+      openToolEntryIndexByItemId.set(toolItemId, collapsed.length - 1);
+    }
   }
+
   return collapsed;
+}
+
+function isCollapsibleToolLifecycleKind(kind: OrchestrationThreadActivity["kind"]): boolean {
+  return kind === "tool.started" || kind === "tool.updated" || kind === "tool.completed";
 }
 
 function shouldCollapseToolLifecycleEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): boolean {
-  if (previous.activityKind !== "tool.updated" && previous.activityKind !== "tool.completed") {
+  if (!isCollapsibleToolLifecycleKind(previous.activityKind)) {
     return false;
   }
-  if (next.activityKind !== "tool.updated" && next.activityKind !== "tool.completed") {
+  if (!isCollapsibleToolLifecycleKind(next.activityKind)) {
     return false;
   }
   if (previous.activityKind === "tool.completed") {
     return false;
+  }
+  if (previous.toolItemId && next.toolItemId) {
+    return previous.toolItemId === next.toolItemId;
   }
   return previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey;
 }
@@ -579,6 +618,7 @@ function mergeDerivedWorkLogEntries(
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
+  const toolItemId = next.toolItemId ?? previous.toolItemId;
   return {
     ...previous,
     ...next,
@@ -590,6 +630,7 @@ function mergeDerivedWorkLogEntries(
     ...(itemType ? { itemType } : {}),
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
+    ...(toolItemId ? { toolItemId } : {}),
   };
 }
 
@@ -605,7 +646,7 @@ function mergeChangedFiles(
 }
 
 function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
-  if (entry.activityKind !== "tool.updated" && entry.activityKind !== "tool.completed") {
+  if (!isCollapsibleToolLifecycleKind(entry.activityKind)) {
     return undefined;
   }
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
@@ -797,13 +838,17 @@ function extractToolCommand(payload: Record<string, unknown> | null): {
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
   const itemInput = asRecord(item?.input);
+  const itemArgs = asRecord(item?.args);
+  const dataArgs = asRecord(data?.args);
   const itemType = asTrimmedString(payload?.itemType);
   const detail = asTrimmedString(payload?.detail);
   const candidates: unknown[] = [
     item?.command,
     itemInput?.command,
     itemResult?.command,
+    itemArgs?.command,
     data?.command,
+    dataArgs?.command,
     itemType === "command_execution" && detail ? stripTrailingExitCode(detail).output : null,
   ];
 

@@ -247,8 +247,7 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         ),
     },
     nostrDm: {
-      getStatus: () =>
-        transport.request((client) => client[NOSTR_DM_WS_METHODS.getStatus]({})),
+      getStatus: () => transport.request((client) => client[NOSTR_DM_WS_METHODS.getStatus]({})),
       getThreadNpub: (input) =>
         transport.request((client) => client[NOSTR_DM_WS_METHODS.getThreadNpub](input)),
       addAllowedPubkey: (input) =>

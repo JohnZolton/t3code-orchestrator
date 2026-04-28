@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   type OrchestrationEvent,
+  ThreadId,
 } from "@t3tools/contracts";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -11,8 +12,11 @@ import { OrchestrationEventStore } from "../../persistence/Services/Orchestratio
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
-import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
-import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
+import {
+  ProjectionThreadActivityRepository,
+  type ProjectionThreadActivity,
+  type ProjectionThreadActivityRepositoryShape,
+} from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
   type ProjectionThreadMessage,
   ProjectionThreadMessageRepository,
@@ -47,6 +51,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import { compactHistoricalToolActivities } from "../activityPayloadSanitizer.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -190,6 +195,20 @@ function retainProjectionActivitiesAfterRevert(
   );
   return activities.filter(
     (activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId),
+  );
+}
+
+function rewriteThreadActivitiesProjection(
+  projectionThreadActivityRepository: ProjectionThreadActivityRepositoryShape,
+  threadId: ThreadId,
+  rows: ReadonlyArray<ProjectionThreadActivity>,
+): Effect.Effect<void, ProjectionRepositoryError> {
+  return projectionThreadActivityRepository.deleteByThreadId({ threadId }).pipe(
+    Effect.flatMap(() =>
+      Effect.forEach(rows, projectionThreadActivityRepository.upsert, {
+        concurrency: 1,
+      }).pipe(Effect.asVoid),
+    ),
   );
 }
 
@@ -768,6 +787,49 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
 
+        case "thread.turn-diff-completed": {
+          const existingRows = yield* projectionThreadActivityRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+          const existingTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const nextTurns = [
+            ...existingTurns.filter((turn) => turn.turnId !== event.payload.turnId),
+            {
+              ...(existingTurns.find((turn) => turn.turnId === event.payload.turnId) ?? {
+                threadId: event.payload.threadId,
+                pendingMessageId: null,
+                sourceProposedPlanThreadId: null,
+                sourceProposedPlanId: null,
+                requestedAt: event.payload.completedAt,
+                startedAt: event.payload.completedAt,
+              }),
+              turnId: event.payload.turnId,
+              assistantMessageId: event.payload.assistantMessageId,
+              state: "completed" as const,
+              completedAt: event.payload.completedAt,
+              checkpointTurnCount: event.payload.checkpointTurnCount,
+              checkpointRef: event.payload.checkpointRef,
+              checkpointStatus: event.payload.status,
+              checkpointFiles: event.payload.files,
+            },
+          ];
+          const compactedRows = compactHistoricalToolActivities(existingRows, nextTurns);
+          if (compactedRows.length === existingRows.length) {
+            return;
+          }
+          yield* rewriteThreadActivitiesProjection(
+            projectionThreadActivityRepository,
+            event.payload.threadId,
+            compactedRows,
+          );
+          return;
+        }
+
         case "thread.reverted": {
           const existingRows = yield* projectionThreadActivityRepository.listByThreadId({
             threadId: event.payload.threadId,
@@ -783,15 +845,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             existingTurns,
             event.payload.turnCount,
           );
-          if (keptRows.length === existingRows.length) {
+          const compactedRows = compactHistoricalToolActivities(keptRows, existingTurns);
+          if (compactedRows.length === existingRows.length) {
             return;
           }
-          yield* projectionThreadActivityRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          yield* Effect.forEach(keptRows, projectionThreadActivityRepository.upsert, {
-            concurrency: 1,
-          }).pipe(Effect.asVoid);
+          yield* rewriteThreadActivitiesProjection(
+            projectionThreadActivityRepository,
+            event.payload.threadId,
+            compactedRows,
+          );
           return;
         }
 
@@ -803,18 +865,59 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadSessionsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadSessionsProjection",
     )(function* (event, _attachmentSideEffects) {
-      if (event.type !== "thread.session-set") {
-        return;
+      switch (event.type) {
+        case "thread.session-set": {
+          const preserveInterruptedTurn =
+            event.payload.session.status === "running" &&
+            event.payload.session.activeTurnId !== null
+              ? yield* projectionTurnRepository
+                  .getByTurnId({
+                    threadId: event.payload.threadId,
+                    turnId: event.payload.session.activeTurnId,
+                  })
+                  .pipe(
+                    Effect.map((turn) => Option.isSome(turn) && turn.value.state === "interrupted"),
+                  )
+              : false;
+
+          yield* projectionThreadSessionRepository.upsert({
+            threadId: event.payload.threadId,
+            status: preserveInterruptedTurn ? "interrupted" : event.payload.session.status,
+            providerName: event.payload.session.providerName,
+            runtimeMode: event.payload.session.runtimeMode,
+            activeTurnId: preserveInterruptedTurn ? null : event.payload.session.activeTurnId,
+            lastError: event.payload.session.lastError,
+            updatedAt: event.payload.session.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.turn-interrupt-requested": {
+          const existingRow = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          if (
+            event.payload.turnId !== undefined &&
+            existingRow.value.activeTurnId !== null &&
+            existingRow.value.activeTurnId !== event.payload.turnId
+          ) {
+            return;
+          }
+          yield* projectionThreadSessionRepository.upsert({
+            ...existingRow.value,
+            status: "interrupted",
+            activeTurnId: null,
+            updatedAt: event.payload.createdAt,
+          });
+          return;
+        }
+
+        default:
+          return;
       }
-      yield* projectionThreadSessionRepository.upsert({
-        threadId: event.payload.threadId,
-        status: event.payload.session.status,
-        providerName: event.payload.session.providerName,
-        runtimeMode: event.payload.session.runtimeMode,
-        activeTurnId: event.payload.session.activeTurnId,
-        lastError: event.payload.session.lastError,
-        updatedAt: event.payload.session.updatedAt,
-      });
     });
 
     const applyThreadTurnsProjection: ProjectorDefinition["apply"] = Effect.fn(
@@ -847,7 +950,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           if (Option.isSome(existingTurn)) {
             const nextState =
-              existingTurn.value.state === "completed" || existingTurn.value.state === "error"
+              existingTurn.value.state === "completed" ||
+              existingTurn.value.state === "error" ||
+              existingTurn.value.state === "interrupted"
                 ? existingTurn.value.state
                 : "running";
             yield* projectionTurnRepository.upsertByTurnId({

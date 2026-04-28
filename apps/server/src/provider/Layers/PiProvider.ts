@@ -1,3 +1,6 @@
+import * as OS from "node:os";
+import * as Path from "node:path";
+
 import type { PiSettings, ServerProvider } from "@t3tools/contracts";
 import { Cause, Effect, Equal, Layer, Stream } from "effect";
 
@@ -13,6 +16,16 @@ import { probePiModels, EMPTY_PI_MODEL_CAPABILITIES } from "../piRuntime.ts";
 import { PiProvider } from "../Services/PiProvider.ts";
 
 const PROVIDER = "pi" as const;
+
+function resolvePiProbeCwd(input: { readonly binaryPath: string; readonly cwd: string }): string {
+  const configuredCwd = input.cwd.trim();
+  if (configuredCwd.length > 0 && configuredCwd !== OS.homedir()) {
+    return configuredCwd;
+  }
+
+  const binaryDir = Path.dirname(input.binaryPath).trim();
+  return binaryDir.length > 0 ? binaryDir : input.cwd;
+}
 
 function checkPiProviderStatus(input: {
   readonly settings: PiSettings;
@@ -55,11 +68,15 @@ function checkPiProviderStatus(input: {
       });
     }
 
+    const probeCwd = resolvePiProbeCwd({
+      binaryPath: input.settings.binaryPath,
+      cwd: input.cwd,
+    });
     const modelsExit = yield* Effect.exit(
       Effect.tryPromise(() =>
         probePiModels({
           binaryPath: input.settings.binaryPath,
-          cwd: input.cwd,
+          cwd: probeCwd,
         }),
       ),
     );

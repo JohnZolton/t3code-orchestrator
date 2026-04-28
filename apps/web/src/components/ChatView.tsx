@@ -3550,6 +3550,7 @@ export default function ChatView(props: ChatViewProps) {
       type: "thread.turn.interrupt",
       commandId: newCommandId(),
       threadId: activeThread.id,
+      ...(activeThread.session?.activeTurnId ? { turnId: activeThread.session.activeTurnId } : {}),
       createdAt: new Date().toISOString(),
     });
   };

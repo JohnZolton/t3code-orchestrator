@@ -306,10 +306,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // to receive every event published after the returned Effect completes.
     // Use this when you need to read a snapshot between subscribing and
     // pulling, so no events fall into a gap.
-    subscribeDomainEvents: Effect.map(
-      PubSub.subscribe(eventPubSub),
-      (subscription) =>
-        Stream.fromChannel(Channel.fromSubscriptionArray(subscription)),
+    subscribeDomainEvents: Effect.map(PubSub.subscribe(eventPubSub), (subscription) =>
+      Stream.fromChannel(Channel.fromSubscriptionArray(subscription)),
     ),
   } satisfies OrchestrationEngineShape;
 });
