@@ -5631,6 +5631,96 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("clears registered subagent activity when its task becomes ambient", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const stopRequests: Array<string> = [];
+        const harness = yield* makeWakeHarnessWithOptions({
+          stopTask: (taskId) => Effect.sync(() => void stopRequests.push(taskId)),
+        });
+        const task = {
+          task_id: "ambient-agent",
+          task_type: "local_agent",
+          description: "Watch artifact updates",
+        };
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-subagent-becomes-ambient"),
+            text: "Watch this task.",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            ...task,
+            tool_use_id: "toolu-ambient-agent",
+            ambient: false,
+            uuid: "00000000-0000-4000-8000-000000000321",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        assert.equal((yield* Queue.take(harness.subagentReceipts)).subagent.status, "running");
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: [{ ...task, ambient: true }],
+            uuid: "00000000-0000-4000-8000-000000000322",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        const pendingAfterClassification = yield* harness.hasPendingBackgroundWork;
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_notification",
+            task_id: task.task_id,
+            tool_use_id: "toolu-ambient-agent",
+            status: "completed",
+            output_file: "/tmp/ambient-agent.output",
+            summary: "Watch finished.",
+            ambient: true,
+            uuid: "00000000-0000-4000-8000-000000000323",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.offerAndWait(turnOneResult);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+        const latestSubagent = harness.events.findLast(
+          (event) =>
+            event.type === "subagent.updated" &&
+            event.subagent.nativeTaskRef?.nativeId === task.task_id,
+        );
+        assert.deepEqual(
+          {
+            pendingAfterClassification,
+            pendingAfterTerminal: yield* harness.hasPendingBackgroundWork,
+            subagentStillRunning:
+              latestSubagent?.type === "subagent.updated" &&
+              latestSubagent.subagent.status === "running",
+            stopRequests,
+          },
+          {
+            pendingAfterClassification: false,
+            pendingAfterTerminal: false,
+            subagentStillRunning: false,
+            stopRequests: [],
+          },
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps a running Claude monitor typed after many newer monitors end", () =>
     Effect.scoped(
       Effect.gen(function* () {
