@@ -6397,7 +6397,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
           for (const [taskId, subagent] of subagents) {
             if (
-              subagent.task.workflow === undefined ||
+              (subagent.task.workflow === undefined && !closedQuery.ambientTaskIds.has(taskId)) ||
               subagent.task.status !== "running" ||
               closedQuery.subagentsFromEarlierProcesses.has(subagent)
             )
@@ -6492,6 +6492,39 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
+        const reconcileAmbientSubagentOutcome = Effect.fnUntraced(function* (
+          liveQuery: ClaudeLiveQueryContext,
+          message: SDKMessage,
+        ) {
+          // Classification removes activity, but only the native outcome settles an existing child.
+          if (
+            message.type === "system" &&
+            message.subtype === "task_notification" &&
+            !appliedSubagentOutcomes.has(message)
+          ) {
+            const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id);
+            const current = yield* Ref.get(activeTurn);
+            const context =
+              current?.nativeThreadId === liveQuery.nativeThreadId ? current : liveQuery.lastTurn;
+            if (
+              registered !== undefined &&
+              !liveQuery.subagentsFromEarlierProcesses.has(registered) &&
+              context !== null
+            ) {
+              yield* updateClaudeSubagentNode({
+                context,
+                taskId: message.task_id,
+                ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
+                workflowFrame: message,
+                nativeOutcome: message,
+                result: message.summary,
+                status: claudeTaskOutcome(message.status),
+                onlyIfRunningInRun: registered.task.runId,
+              });
+            }
+          }
+        });
+
         const bufferWakeMessage = Effect.fnUntraced(function* (wakeInput: {
           readonly nativeThreadId: string;
           readonly message: SDKMessage;
@@ -6500,6 +6533,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // Prompt-echo gating can buffer frames without routing them first.
           const liveQuery = yield* Ref.get(queryContext);
           if (liveQuery !== null && isClaudeAmbientTask(message, liveQuery.ambientTaskIds)) {
+            yield* reconcileAmbientSubagentOutcome(liveQuery, message);
             return;
           }
           const isNotification =
@@ -6859,6 +6893,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           const message = input.message;
           if (isClaudeAmbientTask(message, liveQuery.ambientTaskIds)) {
+            yield* reconcileAmbientSubagentOutcome(liveQuery, message);
             return;
           }
           // Before any routing: a Monitor started during an idle wake turn
@@ -8466,6 +8501,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
             if (
               subagent.task.status === "running" &&
+              !live.ambientTaskIds.has(taskId) &&
               !live.subagentsFromEarlierProcesses.has(subagent) &&
               !buffered.some(
                 (message) =>
@@ -8558,6 +8594,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const closedExistingNativeThreadId = existing !== null ? existing.nativeThreadId : null;
           if (existing !== null) {
             yield* existing.query.close.pipe(Effect.ignore);
+            // Replacement can claim queryContext before the old stream's exit handler runs.
+            if (existing.lastTurn !== null) {
+              const subagents = yield* Ref.get(sessionSubagentsByTaskId);
+              for (const taskId of existing.ambientTaskIds) {
+                const subagent = subagents.get(taskId);
+                if (subagent === undefined || existing.subagentsFromEarlierProcesses.has(subagent))
+                  continue;
+                yield* updateClaudeSubagentNode({
+                  context: existing.lastTurn,
+                  taskId,
+                  status: "cancelled",
+                  onlyIfRunningInRun: subagent.task.runId,
+                });
+              }
+            }
             if (existing.nativeThreadId !== nativeThreadId) {
               yield* clearWakeStateForNativeThread(existing.nativeThreadId);
               yield* resetBackgroundTaskStateForNativeThreadProcess(existing.nativeThreadId, {
@@ -9032,6 +9083,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolUseId === null ||
               subagent.task.status !== "running" ||
               subagent.task.parentNodeId !== subagent.rootNodeId ||
+              live.ambientTaskIds.has(taskId) ||
               live.subagentsFromEarlierProcesses.has(subagent) ||
               (yield* isNestedSubagentTask(taskId))
             ) {
@@ -9242,8 +9294,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 return true;
               }
             }
-            for (const subagent of (yield* Ref.get(sessionSubagentsByTaskId)).values()) {
-              if (subagent.task.status === "running") {
+            const liveQuery = yield* Ref.get(queryContext);
+            for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
+              if (subagent.task.status === "running" && !liveQuery?.ambientTaskIds.has(taskId)) {
                 return true;
               }
             }
