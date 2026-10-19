@@ -8011,19 +8011,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (liveQuery?.query === input.query && message.type === "system") {
             if (message.subtype === "background_tasks_changed") {
               for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
-                if (
-                  task?.ambient === true &&
-                  typeof task.task_id === "string" &&
-                  task.task_id.length > 0
-                ) {
+                if (typeof task?.task_id !== "string" || task.task_id.length === 0) {
+                  continue;
+                }
+                if (task.ambient === true) {
                   liveQuery.ambientTaskIds.add(task.task_id);
+                } else if (task.ambient === false) {
+                  liveQuery.ambientTaskIds.delete(task.task_id);
                 }
               }
             } else if (
-              (message.subtype === "task_started" || message.subtype === "task_notification") &&
-              message.ambient === true
+              message.subtype === "task_started" ||
+              message.subtype === "task_notification"
             ) {
-              liveQuery.ambientTaskIds.add(message.task_id);
+              if (message.ambient === true) {
+                liveQuery.ambientTaskIds.add(message.task_id);
+              } else if (message.ambient === false) {
+                liveQuery.ambientTaskIds.delete(message.task_id);
+              }
             }
           }
           if (

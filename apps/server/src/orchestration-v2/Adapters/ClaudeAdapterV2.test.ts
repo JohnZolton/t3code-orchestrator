@@ -5576,8 +5576,61 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  // Frame shapes follow the claude_background_monitor_wake recording: Claude
-  // runs a Monitor as a local_bash task, linked to its call by tool_use_id.
+  it.effect("tracks a task that explicitly stops being ambient", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-ambient-flip"),
+            text: "Watch this task.",
+            attachments: [],
+          }),
+        );
+        for (const ambient of [true, false]) {
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "system",
+              subtype: "background_tasks_changed",
+              tasks: [
+                {
+                  task_id: WAKE_TASK_ID,
+                  task_type: "local_bash",
+                  description: WAKE_TASK_DESCRIPTION,
+                  ambient,
+                },
+              ],
+              uuid: ambient
+                ? "00000000-0000-4000-8000-000000000311"
+                : "00000000-0000-4000-8000-000000000312",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          assert.equal(yield* harness.hasPendingBackgroundWork, !ambient);
+        }
+        yield* harness.offerAndWait(turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
+        assert.deepEqual(
+          providerThreadRosterEvents(harness.events)
+            .at(-1)
+            ?.providerThread.pendingBackgroundTasks?.map((task) => task.taskId),
+          [WAKE_TASK_ID],
+        );
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        yield* harness.offerAndWait(wakeNotification);
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        assert.isFalse(harness.events.some((event) => event.type === "subagent.updated"));
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps a running Claude monitor typed after many newer monitors end", () =>
     Effect.scoped(
       Effect.gen(function* () {
