@@ -5481,73 +5481,99 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  // Publishing a Claude artifact arms a live-update watcher for it. The SDK
-  // reports it as a task_started/background_tasks_changed entry with
-  // `ambient: true` and asks hosts to keep such tasks out of activity
-  // indicators. It never ends on its own, so projecting it as a subagent or
-  // onto the Waiting roster leaves the thread "Running" indefinitely.
-  it.effect("ignores ambient tasks such as an artifact live watch", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
-        const now = yield* DateTime.now;
-        const AMBIENT_TASK_ID = "s6315tsbk";
-        const ambientTaskStarted = claudeSdkFrame({
-          type: "system",
-          subtype: "task_started",
-          task_id: AMBIENT_TASK_ID,
-          tool_use_id: "toolu_018yCZvaj3NNS4PdmFayZHTC",
-          description:
-            "live updates for artifact https://claude.ai/artifact/Aku2Q1sSEztJpUFuzdEzgt (auto-armed on publish)",
-          task_type: "monitor_ws",
-          ambient: true,
-          uuid: "00000000-0000-4000-8000-000000000301",
-          session_id: WAKE_NATIVE_SESSION,
-        });
-        const ambientRoster = claudeSdkFrame({
-          type: "system",
-          subtype: "background_tasks_changed",
-          tasks: [
-            {
-              task_id: AMBIENT_TASK_ID,
-              task_type: "monitor_ws",
-              description:
-                "live updates for artifact https://claude.ai/artifact/Aku2Q1sSEztJpUFuzdEzgt (auto-armed on publish)",
-              ambient: true,
-            },
-          ],
-          uuid: "00000000-0000-4000-8000-000000000302",
-          session_id: WAKE_NATIVE_SESSION,
-        });
+  it.effect.each(["task_started", "background_tasks_changed"] as const)(
+    "ignores ambient tasks across turns when learned from %s",
+    (source) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          const ambientTask = {
+            task_id: "artifact-watch",
+            task_type: source === "task_started" ? "monitor_ws" : "local_bash",
+            description: "Watch artifact updates",
+            ambient: true,
+          };
+          const initialFrame = claudeSdkFrame({
+            type: "system",
+            subtype: source,
+            ...(source === "task_started"
+              ? { ...ambientTask, tool_use_id: "toolu-artifact-watch" }
+              : {
+                  tasks: [
+                    ambientTask,
+                    {
+                      task_id: WAKE_TASK_ID,
+                      task_type: "local_bash",
+                      description: WAKE_TASK_DESCRIPTION,
+                    },
+                  ],
+                }),
+            uuid: "00000000-0000-4000-8000-000000000301",
+            session_id: WAKE_NATIVE_SESSION,
+          });
 
-        yield* harness.runtime.startTurn(
-          makeClaudeTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now,
-            attemptId: RunAttemptId.make("attempt-claude-ambient-task"),
-            text: "Publish this page as an artifact.",
-            attachments: [],
-          }),
-        );
-        yield* Queue.offer(harness.sdkMessages, ambientRoster);
-        yield* Queue.offer(harness.sdkMessages, ambientTaskStarted);
-        yield* Queue.offer(harness.sdkMessages, turnOneResult);
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
-
-        assert.isFalse(
-          harness.events.some((event) => event.type === "subagent.updated"),
-          "an ambient task must not project as a subagent",
-        );
-        assert.isFalse(
-          providerThreadRosterEvents(harness.events).some(
-            (event) => (event.providerThread.pendingBackgroundTasks?.length ?? 0) > 0,
+          for (const ordinal of [1, 2]) {
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make(`attempt-ambient-${ordinal}`),
+                providerTurnOrdinal: ordinal,
+                text: "Update the artifact.",
+                attachments: [],
+              }),
+            );
+            if (ordinal === 1) {
+              yield* harness.offerAndWait(wakeTaskStarted);
+              yield* harness.offerAndWait(initialFrame);
+              assert.isTrue(yield* harness.hasPendingBackgroundWork);
+              yield* harness.offerAndWait(wakeNotification);
+            } else {
+              // Progress omits ambient; the watcher outlives the turn that identified it.
+              yield* harness.offerAndWait(
+                claudeSdkFrame({
+                  type: "system",
+                  subtype: "task_progress",
+                  task_id: ambientTask.task_id,
+                  description: "Watching for artifact changes",
+                  usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 },
+                  uuid: "00000000-0000-4000-8000-000000000302",
+                  session_id: WAKE_NATIVE_SESSION,
+                }),
+              );
+            }
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: `00000000-0000-4000-8000-00000000030${ordinal + 2}`,
+                result: "Artifact updated.",
+              }),
+            );
+            const terminal = yield* Queue.take(harness.terminalReceipts);
+            assert.equal(terminal.status, "completed");
+            assert.isFalse(
+              harness.events.some((event) => event.type === "subagent.updated"),
+              `ambient task must not become a subagent in turn ${ordinal}`,
+            );
+            assert.deepEqual(
+              [
+                ...new Set(
+                  providerThreadRosterEvents(harness.events).flatMap((event) =>
+                    (event.providerThread.pendingBackgroundTasks ?? []).map((task) => task.taskId),
+                  ),
+                ),
+              ],
+              [WAKE_TASK_ID],
+              "only ordinary background work belongs in the Waiting roster",
+            );
+            assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          }
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
           ),
-          "an ambient task must not enter the Waiting roster",
-        );
-        assert.isFalse(yield* harness.hasPendingBackgroundWork);
-      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
-    ),
+        ),
+      ),
   );
 
   // Frame shapes follow the claude_background_monitor_wake recording: Claude
